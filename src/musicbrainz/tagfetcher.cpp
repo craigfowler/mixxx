@@ -6,9 +6,12 @@
  *  as published by Sam Hocevar.                                             *
  *  See http://www.wtfpl.net/ for more details.                              *
  *****************************************************************************/
-    
+
 #include <QFuture>
 #include <QUrl>
+#if QT_VERSION >= QT_VERSION_CHECK(5, 0, 0)
+#include <QtConcurrent>
+#endif
 #include <QtConcurrentMap>
 
 #include "musicbrainz/tagfetcher.h"
@@ -31,7 +34,7 @@ TagFetcher::TagFetcher(QObject* parent)
 }
 
 QString TagFetcher::getFingerprint(const TrackPointer tio) {
-    return chromaprinter(NULL).getFingerPrint(tio);
+    return ChromaPrinter(NULL).getFingerPrint(tio);
 }
 
 void TagFetcher::startFetch(const TrackPointer track) {
@@ -111,7 +114,9 @@ void TagFetcher::tagsFetched(int index, const MusicBrainzClient::ResultList& res
     QList<TrackPointer> tracksGuessed;
 
     foreach (const MusicBrainzClient::Result& result, results) {
-        TrackPointer track(new TrackInfoObject(originalTrack->getLocation(),false),
+        TrackPointer track(new TrackInfoObject(originalTrack->getLocation(),
+                                               originalTrack->getSecurityToken(),
+                                               false),
                            &QObject::deleteLater);
         track->setTitle(result.m_title);
         track->setArtist(result.m_artist);

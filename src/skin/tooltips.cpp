@@ -1,4 +1,3 @@
-
 #include "skin/tooltips.h"
 
 Tooltips::Tooltips() {
@@ -26,7 +25,7 @@ QList<QString>& Tooltips::add(QString id) {
 }
 
 void Tooltips::addStandardTooltips() {
-    QString dropTracksHere = tr("Drop tracks from library or external file manager here.");
+    QString dropTracksHere = tr("Drop tracks from library, external file manager, or other decks/samplers here.");
     QString resetToDefault = tr("Reset to default value.");
     QString leftClick = tr("Left-click");
     QString rightClick = tr("Right-click");
@@ -47,6 +46,16 @@ void Tooltips::addStandardTooltips() {
             << QString("%1: %2").arg(scrollWheel, tr("Scroll to change the waveform zoom level."))
             << dropTracksHere;
 
+    add("waveform_zoom_up")
+            << tr("Waveform Zoom Out");
+
+    add("waveform_zoom_down")
+            << tr("Waveform Zoom In");
+
+    add("waveform_zoom_set_default")
+            << tr("Waveform Zoom")
+            << QString("%1").arg(resetToDefault);
+    
     add("spinny")
             << tr("Spinning Vinyl")
             << tr("Rotates during playback and shows the position of a track.")
@@ -91,9 +100,15 @@ void Tooltips::addStandardTooltips() {
             << tr("Adjusts the volume of the selected channel.")
             << QString("%1: %2").arg(rightClick, resetToDefault);
 
+    // Legacy control.
     add("master_volume")
             << tr("Master Volume")
             << tr("Adjusts the master output volume.")
+            << QString("%1: %2").arg(rightClick, resetToDefault);
+
+    add("master_gain")
+            << tr("Master Gain")
+            << tr("Adjusts the master output gain.")
             << QString("%1: %2").arg(rightClick, resetToDefault);
 
     add("crossfader")
@@ -107,9 +122,15 @@ void Tooltips::addStandardTooltips() {
             << tr("Adjusts the left/right channel balance on the master output.")
             << QString("%1: %2").arg(rightClick, resetToDefault);
 
+    // Legacy control.
     add("headphone_volume")
             << tr("Headphone Volume")
             << tr("Adjusts the headphone output volume.")
+            << QString("%1: %2").arg(rightClick, resetToDefault);
+
+    add("headphone_gain")
+            << tr("Headphone Gain")
+            << tr("Adjusts the headphone output gain.")
             << QString("%1: %2").arg(rightClick, resetToDefault);
 
     add("headMix")
@@ -117,6 +138,12 @@ void Tooltips::addStandardTooltips() {
             << tr("Controls what you hear on the headphone output.")
             << QString("%1: %2").arg(rightClick, resetToDefault);
 
+    add("headSplit")
+            << tr("Headphone Split Cue")
+            << tr("If activated, the master signal plays in the right channel, while the cueing signal "
+                  "plays in the left channel.")
+            << tr("Adjust the Headphone Mix so in the left channel is not the pure cueing signal.");
+    
     // Note, this is used for samplers and microphone only currently (that's why
     // center is the default).
     add("orientation")
@@ -141,9 +168,38 @@ void Tooltips::addStandardTooltips() {
             << tr("Preview Deck")
             << tr("Show/hide the Preview deck.");
 
+    add("show_coverart")
+            << tr("Cover Art")
+            << tr("Show/hide Cover Art.");
+
+    add("toggle_4decks")
+            << tr("Toggle 4 Decks")
+            << tr("Switches between showing 2 decks and 4 decks.");
+
+    add("show_library")
+            << tr("Show Library")
+            << tr("Show or hide the track library.");
+
+    add("show_effects")
+            << tr("Show Effect Rack")
+            << tr("Show or hide the effect rack.");
+
+    add("toggle_expanded_library")
+            << tr("Toggle Big Library")
+            << tr("Makes the library fill the screen.");
+
+    add("show_mixer")
+            << tr("Toggle Mixer")
+            << tr("Show or hide the mixer.");
+
     add("microphone_volume")
             << tr("Microphone Volume")
             << tr("Adjusts the microphone volume.")
+            << QString("%1: %2").arg(rightClick, resetToDefault);
+
+    add("microphone_pregain")
+            << tr("Microphone Gain")
+            << tr("Adjusts the pre-fader microphone gain.")
             << QString("%1: %2").arg(rightClick, resetToDefault);
 
     add("microphone_talkover")
@@ -212,9 +268,30 @@ void Tooltips::addStandardTooltips() {
             << tr("Tempo")
             << tempoDisplay;
 
+    add("visual_key")
+            //: The musical key of a track
+            << tr("Key")
+            << tr("Displays the current musical key of the loaded track after pitch shifting.");
+
     add("bpm_tap")
             << tr("BPM Tap")
             << tr("When tapped repeatedly, adjusts the BPM to match the tapped BPM.");
+
+    add("beats_adjust_slower")
+            << tr("Adjust BPM Down")
+            << tr("When tapped, adjusts the average BPM down by a small amount.");
+
+    add("beats_adjust_faster")
+            << tr("Adjust BPM Up")
+            << tr("When tapped, adjusts the average BPM up by a small amount.");
+
+    add("beats_translate_earlier")
+            << tr("Adjust Beats Earlier")
+            << tr("When tapped, moves the beatgrid left by a small amount.");
+
+    add("beats_translate_later")
+            << tr("Adjust Beats Later")
+            << tr("When tapped, moves the beatgrid right by a small amount.");
 
     //this is a special case, in some skins (e.g. Deere) we display a transparent png for bpm_tap on top of visual_bpm
     add("bpm_tap_visual_bpm")
@@ -228,7 +305,8 @@ void Tooltips::addStandardTooltips() {
 
     add("beats_translate_curpos")
             << tr("Adjust Beatgrid")
-            << tr("Adjust beatgrid so the closest beat is aligned with the current play position.");
+            << QString("%1: %2").arg(leftClick, tr("Adjust beatgrid so the closest beat is aligned with the current play position."))
+            << QString("%1: %2").arg(rightClick, tr("Adjust beatgrid to match another playing deck."));
 
     add("keylock")
             << tr("Key-Lock")
@@ -242,15 +320,18 @@ void Tooltips::addStandardTooltips() {
             << tr("Toggles quantization.")
             << tr("Loops and cues snap to the nearest beat when quantization is enabled.");
 
+    // Reverse and reverseroll (censor)
     add("reverse")
-            << tr("Reverse")
-            << tr("Reverses track playback during regular playback.");
+    << tr("Reverse")
+            << QString("%1: %2").arg(leftClick, tr("Reverses track playback during regular playback."))
+            << QString("%1: %2").arg(rightClick, tr("Puts a track into reverse while being held (Censor)."))
+            << tr("Playback continues where the track would have been if it had not been temporarily reversed.");
 
     // Currently used for samplers
     add("play_start")
             << tr("Play/Pause")
-            << QString("%1: %2").arg(leftClick, tr("Toggles playing or pausing the track."))
-            << QString("%1: %2").arg(rightClick, tr("Jumps to the beginning of the track."));
+            << QString("%1: %2").arg(leftClick, tr("Starts playing from the beginning of the track."))
+            << QString("%1: %2").arg(rightClick, tr("Jumps to the beginning of the track and stops."));
 
     // Currently used for decks
     QString cueSet = tr("Places a cue-point at the current position on the waveform.");
@@ -263,16 +344,20 @@ void Tooltips::addStandardTooltips() {
     QString whileStopped = tr("(while stopped)");
     add("cue_default_cue_gotoandstop")
             << tr("Cue")
-            << QString("%1 %2: %3").arg(leftClick, whilePlaying, tr("Seeks the track to the cue-point and stops (=CDJ) OR plays (=simple)."))
-            << tr("Change the default cue behavior in Preferences -> Interface.")
-            << QString("%1 %2: %3").arg(leftClick, whileStopped, cueSet)
+            << QString("%1 %2: %3").arg(leftClick, whilePlaying, tr("Stops track at cue point."))
+            << QString("%1 %2: %3").arg(leftClick, whileStopped, tr("Set cue point (Pioneer/Mixxx mode) OR preview from it (Denon mode)."))
+            << tr("Hint: Change the default cue mode in Preferences -> Interface.")
             << quantizeSnap
             << QString("%1: %2").arg(rightClick, tr("Seeks the track to the cue-point and stops."));
 
     add("pfl")
             << tr("Headphone")
-            << tr("Sends the selected channel's audio to the headphone output.")
+            << tr("Sends the selected channel's audio to the headphone output,")
             << tr("selected in Preferences -> Sound Hardware.");
+
+    add("mute")
+            << tr("Mute")
+            << tr("Mutes the selected channel's audio in the master output.");
 
     add("back_start")
             << tr("Fast Rewind")
@@ -286,19 +371,62 @@ void Tooltips::addStandardTooltips() {
 
     // Ghetto-Sync (TM)
     add("beatsync_beatsync_tempo")
-            << tr("Synchronize")
-            << QString("%1: %2").arg(leftClick, tr("Syncs the tempo (BPM) and phase to that of the other track, "))
-            << tr("if BPM is detected on both.")
-            << QString("%1: %2").arg(rightClick, tr("Syncs the tempo (BPM) to that of the other track,"))
-            << tr("if BPM is detected on both.")
+            << tr("Old Synchronize")
+            << tr("(This skin should be updated to use Master Sync!)")
+            << QString("%1: %2").arg(leftClick, tr("Syncs the tempo (BPM) and phase to that of the other track, "
+                                                   "if BPM is detected on both."))
+            << QString("%1: %2").arg(rightClick, tr("Syncs the tempo (BPM) to that of the other track, "
+                                                    "if BPM is detected on both."))
             << tr("Syncs to the first deck (in numerical order) that is playing a track and has a BPM.")
             << tr("If no deck is playing, syncs to the first deck that has a BPM.")
             << tr("Decks can't sync to samplers and samplers can only sync to decks.");
 
+    // Awesome-Sync (TM)
+    add("sync_enabled")
+            << tr("Enable Master Sync")
+            << tr("Tap to sync the tempo to other playing tracks or the master clock.")
+            << tr("Hold for at least a second to enable sync lock for this deck.")
+            << tr("Decks with sync locked will all play at the same tempo, and decks that also have "
+                  "quantize enabled will always have their beats lined up.");
+
+    // TODO(owen): find a better phrase for "the other deck"
+    add("sync_reset_key")
+            << tr("Sync and Reset Key")
+            << QString("%1: %2").arg(leftClick, tr("Sets the key to a compatible key with the other track key, "
+                                                   "if a key is detected on both."))
+            << QString("%1: %2").arg(rightClick, tr("Resets the key to the original track key."));
+
+    add("sync_master")
+            << tr("Enable Sync Clock Master")
+            << tr("When enabled, this device will serve as the master clock for all other decks.");
+
     add("rate")
-            << tr("Pitch Control")
-            << tr("Changes the track playback rate.")
+            << tr("Speed Control")
+            << tr("Changes the track playback speed (affects both the tempo and the pitch). If key-lock is enabled, only the tempo is affected.")
             << QString("%1: %2").arg(rightClick, resetToDefault);
+
+    add("pitch")
+            << tr("Pitch Control")
+            << tr("Changes the track pitch independent of the tempo.")
+            << QString("%1: %2").arg(rightClick, resetToDefault);
+
+    add("pitch_up")
+            << tr("Pitch Control")
+            << tr("Changes the track pitch independent of the tempo.")
+            << QString("%1: %2").arg(leftClick, tr("Increases the pitch by one semitone."))
+            << QString("%1: %2").arg(rightClick, tr("Increases the pitch by 10 cents."));
+
+    add("pitch_down")
+            << tr("Pitch Control")
+            << tr("Changes the track pitch independent of the tempo.")
+            << QString("%1: %2").arg(leftClick, tr("Decreases the pitch by one semitone."))
+            << QString("%1: %2").arg(rightClick, tr("Decreases the pitch by 10 cents."));
+
+    add("pitch_adjust")
+            << tr("Pitch Adjust")
+            << tr("Adjust the pitch in addition to the speed slider pitch.")
+            << QString("%1: %2").arg(rightClick, resetToDefault);
+
 
     add("rate_display")
             << tr("Pitch Rate")
@@ -329,8 +457,7 @@ void Tooltips::addStandardTooltips() {
             << tr("Vinyl Status")
             << tr("Provides visual feedback for vinyl control status:")
             << tr("Green for control enabled.")
-            << tr("Blinking yellow for when the needle reaches the end of the record.")
-            << tr("Red for needle skip detected.");
+            << tr("Blinking yellow for when the needle reaches the end of the record.");
 
     add("loop_in")
             << tr("Loop-In Marker")
@@ -359,6 +486,14 @@ void Tooltips::addStandardTooltips() {
             << QString("%1: %2").arg(rightClick, tr("Temporarily setup a rolling loop over the set number of beats."))
             << tr("Playback will resume where the track would have been if it had not entered the loop.");
 
+    add("beatjump")
+            << tr("Beatjump")
+            << QString("%1: %2").arg(leftClick, tr("Jump forward or backward by the set number of beats."));
+
+    add("loop_move")
+            << tr("Loop Move")
+            << QString("%1: %2").arg(leftClick, tr("Adjust the loop in and out points by the set number of beats."));
+
     add("loop_exit")
             << tr("Loop Exit")
             << tr("Turns the current loop off.")
@@ -368,7 +503,7 @@ void Tooltips::addStandardTooltips() {
             << tr("Reloop/Exit")
             << tr("Toggles the current loop on or off.")
             << tr("Works only if Loop-In and Loop-Out marker are set.");
-    
+
     add("slip_mode")
             << tr("Slip Mode")
             << tr("When active, the playback continues muted in the background during a loop, reverse, scratch etc.")
@@ -394,12 +529,14 @@ void Tooltips::addStandardTooltips() {
     add("track_artist")
             << tr("Track Artist")
             << tr("Displays the artist of the loaded track.")
-            << trackTags;
+            << trackTags
+            << dropTracksHere;
 
     add("track_title")
             << tr("Track Title")
             << tr("Displays the title of the loaded track.")
-            << trackTags;
+            << trackTags
+            << dropTracksHere;
 
     add("track_album")
             << tr("Track Album")
@@ -415,36 +552,29 @@ void Tooltips::addStandardTooltips() {
     add("text")
             << tr("Track Artist/Title")
             << tr("Displays the artist and title of the loaded track.")
-            << trackTags;
-
-    add("flanger")
-            << tr("Flanger")
-            << tr("Toggles the flange effect. Use the depth/delay/lfo knobs to adjust.");
-
-    add("lfoDelay")
-            << tr("Flanger Delay")
-            << tr("Adjusts the phase delay of the flange effect (when active).")
-            << QString("%1: %2").arg(rightClick, resetToDefault);
-
-    add("lfoDepth")
-            << tr("Flanger Depth")
-            << tr("Adjusts the intensity of the flange effect (when active).")
-            << QString("%1: %2").arg(rightClick, resetToDefault);
-
-    add("lfoPeriod")
-            << tr("Flanger LFO Period")
-            << tr("Adjusts the wavelength of the flange effect (when active).")
-            << QString("%1: %2").arg(rightClick, resetToDefault);
-
-    add("filter")
-            << tr("Filter")
-            << tr("Toggles the filter effect. Use the depth knobs to adjust.");
-
-    add("filterDepth")
-            << tr("Filter Depth")
-            << tr("Adjusts the intensity of the filter effect (when active).");
+            << trackTags
+            << dropTracksHere;
 
     add("time")
             << tr("Clock")
             << tr("Displays the current time.");
+
+    add("audio_latency_usage")
+            << tr("Audio Latency Usage Meter")
+            << tr("Displays the fraction of latency used for audio processing.")
+            << tr("A high value indicates that audible glitches are likely.")
+            << tr("Do not enable keylock, effects or additional decks in this situation.");
+
+    add("audio_latency_overload")
+            << tr("Audio Latency Overload Indicator")
+            << tr("Indicates that the audio buffer is too small to do all audio processing.");
+
+    add("coverart")
+            << tr("Cover Art")
+            << tr("Displays cover artwork of the loaded track.")
+            << QString("%1: %2").arg(rightClick, tr("Displays options for editing cover artwork."));
+
+    add("starrating")
+            << tr("Star Rating")
+            << tr("Assign ratings to individual tracks by clicking the stars.");
 }

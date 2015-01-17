@@ -9,9 +9,10 @@
 #include <QMutex>
 #include <QPair>
 
-#include "defs.h"
+#include "util/types.h"
+#include "util/math.h"
+#include "cachingreader.h"
 
-struct Hint;
 class EngineControl;
 class CachingReader;
 
@@ -53,7 +54,7 @@ class ReadAheadManager {
 
     // hintReader allows the ReadAheadManager to provide hints to the reader to
     // indicate that the given portion of a song is about to be read.
-    virtual void hintReader(double dRate, QVector<Hint>* hintList);
+    virtual void hintReader(double dRate, HintVector* hintList);
 
     virtual int getEffectiveVirtualPlaypositionFromLog(double currentVirtualPlayposition,
                                                        double numConsumedSamples);
@@ -85,7 +86,7 @@ class ReadAheadManager {
         }
 
         double length() const {
-            return abs(virtualPlaypositionEndNonInclusive -
+            return fabs(virtualPlaypositionEndNonInclusive -
                        virtualPlaypositionStart);
         }
 
@@ -122,7 +123,7 @@ class ReadAheadManager {
     QLinkedList<ReadLogEntry> m_readAheadLog;
     int m_iCurrentPosition;
     CachingReader* m_pReader;
-    CSAMPLE *m_pCrossFadeBuffer;
+    CSAMPLE* m_pCrossFadeBuffer;
 };
 
 #endif // READAHEADMANGER_H

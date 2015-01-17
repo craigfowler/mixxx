@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <QDebug>
+#include <QtDebug>
 
 #include "controlobject.h"
 
@@ -40,10 +40,10 @@ class ControlObjectTest : public testing::Test {
 };
 
 TEST_F(ControlObjectTest, setGet) {
-    co1->set(1.0f);
-    EXPECT_DOUBLE_EQ(1.0f, co1->get());
-    co2->set(2.0f);
-    EXPECT_DOUBLE_EQ(2.0f, co2->get());
+    co1->set(1.0);
+    EXPECT_DOUBLE_EQ(1.0, co1->get());
+    co2->set(2.0);
+    EXPECT_DOUBLE_EQ(2.0, co2->get());
 }
 
 TEST_F(ControlObjectTest, getControl) {
@@ -52,6 +52,20 @@ TEST_F(ControlObjectTest, getControl) {
     delete co2;
     co2 = NULL;
     EXPECT_EQ(ControlObject::getControl(ck2), (ControlObject*)NULL);
+}
+
+TEST_F(ControlObjectTest, aliasRetrieval) {
+    ConfigKey ck("[Microphone1]", "volume");
+    ConfigKey ckAlias("[Microphone]", "volume");
+
+    // Create the Control Object
+    ControlObject* co = new ControlObject(ck);
+
+    // Insert the alias before it is going to be used
+    ControlDoublePrivate::insertAlias(ckAlias, ck);
+
+    // Check if getControl on alias returns us the original ControlObject
+    EXPECT_EQ(ControlObject::getControl(ckAlias), co);
 }
 
 }

@@ -17,10 +17,9 @@
 #include "track/beatutils.h"
 #include "track/beat_preferences.h"
 
-AnalyserBeats::AnalyserBeats(ConfigObject<ConfigValue> *_config)
-        : m_pConfig(_config),
+AnalyserBeats::AnalyserBeats(ConfigObject<ConfigValue>* pConfig)
+        : m_pConfig(pConfig),
           m_pVamp(NULL),
-          m_bShouldAnalyze(false),
           m_bPreferencesReanalyzeOldBpm(false),
           m_bPreferencesFixedTempo(true),
           m_bPreferencesOffsetCorrection(false),
@@ -31,13 +30,10 @@ AnalyserBeats::AnalyserBeats(ConfigObject<ConfigValue> *_config)
           m_iMaxBpm(9999) {
 }
 
-AnalyserBeats::~AnalyserBeats(){
+AnalyserBeats::~AnalyserBeats() {
 }
 
-// TODO(XXX): Get rid of the horrible duplication here between initialise and
-// loadStored.
 bool AnalyserBeats::initialise(TrackPointer tio, int sampleRate, int totalSamples) {
-    m_bShouldAnalyze = false;
     if (totalSamples == 0) {
         return false;
     }
@@ -47,14 +43,12 @@ bool AnalyserBeats::initialise(TrackPointer tio, int sampleRate, int totalSample
             ConfigKey(BPM_CONFIG_KEY, BPM_DETECTION_ENABLED)).toInt());
     if (!bPreferencesBeatDetectionEnabled) {
         qDebug() << "Beat calculation is deactivated";
-        m_bShouldAnalyze = false;
         return false;
     }
 
     bool bpmLock = tio->hasBpmLock();
     if (bpmLock) {
         qDebug() << "Track is BpmLocked: Beat calculation will not start";
-        m_bShouldAnalyze = false;
         return false;
     }
 
@@ -81,7 +75,6 @@ bool AnalyserBeats::initialise(TrackPointer tio, int sampleRate, int totalSample
         m_pConfig->getValueString(
             ConfigKey(BPM_CONFIG_KEY, BPM_FAST_ANALYSIS_ENABLED)).toInt());
 
-
     QString library = m_pConfig->getValueString(
         ConfigKey(VAMP_CONFIG_KEY, VAMP_ANALYSER_BEAT_LIBRARY));
     QString pluginID = m_pConfig->getValueString(
@@ -91,64 +84,28 @@ bool AnalyserBeats::initialise(TrackPointer tio, int sampleRate, int totalSample
     m_iSampleRate = sampleRate;
     m_iTotalSamples = totalSamples;
 
-    // If the track already has a Beats object then we need to decide whether to
-    // analyze this track or not.
-    BeatsPointer pBeats = tio->getBeats();
-    if (pBeats) {
-        QString version = pBeats->getVersion();
-        QString subVersion = pBeats->getSubVersion();
+    // if we can load a stored track don't reanalyze it
+    bool bShouldAnalyze = !loadStored(tio);
 
-        QHash<QString, QString> extraVersionInfo = getExtraVersionInfo(
-            m_pluginId, m_bPreferencesFastAnalysis);
-        QString newVersion = BeatFactory::getPreferredVersion(
-                m_bPreferencesFixedTempo);
-        QString newSubVersion = BeatFactory::getPreferredSubVersion(
-                m_bPreferencesFixedTempo, m_bPreferencesOffsetCorrection,
-                m_iMinBpm, m_iMaxBpm, extraVersionInfo);
-
-        if (version == newVersion && subVersion == newSubVersion) {
-            // If the version and settings have not changed then if the world is
-            // sane, re-analyzing will do nothing.
-            m_bShouldAnalyze = false;
-            qDebug() << "Beat sub-version has not changed since previous analysis so not analyzing.";
-        } else if (m_bPreferencesReanalyzeOldBpm) {
-            m_bShouldAnalyze = true;
-        } else if (pBeats->getBpm() == 0.0) {
-            m_bShouldAnalyze = true;
-            qDebug() << "BPM is 0 for track so re-analyzing despite preference settings.";
-        } else if (pBeats->findNextBeat(0) <= 0.0) {
-            m_bShouldAnalyze = true;
-            qDebug() << "First beat is 0 for grid so analyzing track to find first beat.";
-        } else {
-            m_bShouldAnalyze = false;
-            qDebug() << "Beat calculation skips analyzing because the track has"
-                     << "a BPM computed by a previous Mixxx version and user"
-                     << "preferences indicate we should not change it.";
+    if (bShouldAnalyze) {
+        m_pVamp = new VampAnalyser();
+        bShouldAnalyze = m_pVamp->Init(library, pluginID, m_iSampleRate, totalSamples,
+                                       m_bPreferencesFastAnalysis);
+        if (!bShouldAnalyze) {
+            delete m_pVamp;
+            m_pVamp = NULL;
         }
+    }
+
+    if (bShouldAnalyze) {
+        qDebug() << "Beat calculation started with plugin" << pluginID;
     } else {
-        // If we got here, we think we may want to analyze this track.
-        m_bShouldAnalyze = true;
-    }
-
-
-    if (!m_bShouldAnalyze) {
         qDebug() << "Beat calculation will not start";
-        return false;
     }
-    qDebug() << "Beat calculation started with plugin" << pluginID;
 
-    m_pVamp = new VampAnalyser(m_pConfig);
-    m_bShouldAnalyze = m_pVamp->Init(library, pluginID, m_iSampleRate, totalSamples,
-                                     m_bPreferencesFastAnalysis);
-    if (!m_bShouldAnalyze) {
-        delete m_pVamp;
-        m_pVamp = NULL;
-    }
-    return m_bShouldAnalyze;
+    return bShouldAnalyze;
 }
 
-// TODO(XXX): Get rid of the horrible duplication here between initialise and
-// loadStored.
 bool AnalyserBeats::loadStored(TrackPointer tio) const {
     int iMinBpm;
     int iMaxBpm;
@@ -162,19 +119,6 @@ bool AnalyserBeats::loadStored(TrackPointer tio) const {
         iMinBpm = m_pConfig->getValueString(ConfigKey(BPM_CONFIG_KEY, BPM_RANGE_START)).toInt();
         iMaxBpm = m_pConfig->getValueString(ConfigKey(BPM_CONFIG_KEY, BPM_RANGE_END)).toInt();
     }
-
-    bool bPreferencesFixedTempo = static_cast<bool>(
-        m_pConfig->getValueString(
-            ConfigKey(BPM_CONFIG_KEY, BPM_FIXED_TEMPO_ASSUMPTION)).toInt());
-    bool bPreferencesOffsetCorrection = static_cast<bool>(
-        m_pConfig->getValueString(
-            ConfigKey(BPM_CONFIG_KEY, BPM_FIXED_TEMPO_OFFSET_CORRECTION)).toInt());
-    bool bPreferencesReanalyzeOldBpm = static_cast<bool>(
-        m_pConfig->getValueString(
-            ConfigKey(BPM_CONFIG_KEY, BPM_REANALYZE_WHEN_SETTINGS_CHANGE)).toInt());
-    bool bPreferencesFastAnalysis = static_cast<bool>(
-        m_pConfig->getValueString(
-            ConfigKey(BPM_CONFIG_KEY, BPM_FAST_ANALYSIS_ENABLED)).toInt());
 
     bool bpmLock = tio->hasBpmLock();
     if (bpmLock) {
@@ -192,7 +136,7 @@ bool AnalyserBeats::loadStored(TrackPointer tio) const {
     if (library.isEmpty() || library.isNull())
         library = "libmixxxminimal";
     if (pluginID.isEmpty() || pluginID.isNull())
-        pluginID="qm-tempotracker:0";
+        pluginID = "qm-tempotracker:0";
 
     // If the track already has a Beats object then we need to decide whether to
     // analyze this track or not.
@@ -202,19 +146,18 @@ bool AnalyserBeats::loadStored(TrackPointer tio) const {
         QString subVersion = pBeats->getSubVersion();
 
         QHash<QString, QString> extraVersionInfo = getExtraVersionInfo(
-            pluginID, bPreferencesFastAnalysis);
+            pluginID, m_bPreferencesFastAnalysis);
         QString newVersion = BeatFactory::getPreferredVersion(
-            bPreferencesOffsetCorrection);
+            m_bPreferencesOffsetCorrection);
         QString newSubVersion = BeatFactory::getPreferredSubVersion(
-            bPreferencesFixedTempo, bPreferencesOffsetCorrection,
+            m_bPreferencesFixedTempo, m_bPreferencesOffsetCorrection,
             iMinBpm, iMaxBpm, extraVersionInfo);
 
         if (version == newVersion && subVersion == newSubVersion) {
             // If the version and settings have not changed then if the world is
             // sane, re-analyzing will do nothing.
-            qDebug() << "Beat sub-version has not changed since previous analysis so not analyzing.";
             return true;
-        } else if (bPreferencesReanalyzeOldBpm) {
+        } else if (m_bPreferencesReanalyzeOldBpm) {
             return false;
         } else if (pBeats->getBpm() == 0.0) {
             qDebug() << "BPM is 0 for track so re-analyzing despite preference settings.";
@@ -235,24 +178,23 @@ bool AnalyserBeats::loadStored(TrackPointer tio) const {
 }
 
 void AnalyserBeats::process(const CSAMPLE *pIn, const int iLen) {
-    if (!m_bShouldAnalyze || m_pVamp == NULL)
+    if (m_pVamp == NULL)
         return;
-    m_bShouldAnalyze = m_pVamp->Process(pIn, iLen);
-    if (!m_bShouldAnalyze) {
+    bool success = m_pVamp->Process(pIn, iLen);
+    if (!success) {
         delete m_pVamp;
         m_pVamp = NULL;
     }
 }
 
-void AnalyserBeats::cleanup(TrackPointer tio)
-{
+void AnalyserBeats::cleanup(TrackPointer tio) {
     Q_UNUSED(tio);
     delete m_pVamp;
     m_pVamp = NULL;
 }
 
 void AnalyserBeats::finalise(TrackPointer tio) {
-    if (!m_bShouldAnalyze || m_pVamp == NULL) {
+    if (m_pVamp == NULL) {
         return;
     }
 
@@ -296,7 +238,7 @@ void AnalyserBeats::finalise(TrackPointer tio) {
 
     // If the user prefers to replace old beatgrids with newly generated ones or
     // the old beatgrid has 0-bpm then we replace it.
-    bool zeroCurrentBpm = pCurrentBeats->getBpm() == 0.0f;
+    bool zeroCurrentBpm = pCurrentBeats->getBpm() == 0.0;
     if (m_bPreferencesReanalyzeOldBpm || zeroCurrentBpm) {
         if (zeroCurrentBpm) {
             qDebug() << "Replacing 0-BPM beatgrid with a" << pBeats->getBpm()

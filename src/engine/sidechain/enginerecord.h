@@ -20,16 +20,22 @@
 #include <QDataStream>
 #include <QFile>
 
+#ifdef Q_OS_WIN
+//Enable unicode in libsndfile on Windows
+//(sf_open uses UTF-8 otherwise)
+#include <windows.h>
+#define ENABLE_SNDFILE_WINDOWS_PROTOTYPES 1
+#endif
 #include <sndfile.h>
 
-#include "encoder/encodercallback.h"
 #include "configobject.h"
+#include "encoder/encodercallback.h"
 #include "engine/sidechain/sidechainworker.h"
 #include "trackinfoobject.h"
 
-class Encoder;
 class ConfigKey;
-class ControlObjectThread;
+class ControlObjectSlave;
+class Encoder;
 
 class EngineRecord : public QObject, public EncoderCallback, public SideChainWorker {
     Q_OBJECT
@@ -40,7 +46,7 @@ class EngineRecord : public QObject, public EncoderCallback, public SideChainWor
     void process(const CSAMPLE* pBuffer, const int iBufferSize);
     void shutdown() {}
 
-    /** writes (un)compressed audio to file **/
+    // writes compressed audio to file 
     void write(unsigned char *header, unsigned char *body, int headerLen, int bodyLen);
     // creates or opens an audio file
     bool openFile();
@@ -55,6 +61,7 @@ class EngineRecord : public QObject, public EncoderCallback, public SideChainWor
     // emitted to notify RecordingManager
     void bytesRecorded(int);
     void isRecording(bool);
+    void durationRecorded(QString);
 
   private:
     int getActiveTracks();
@@ -66,31 +73,34 @@ class EngineRecord : public QObject, public EncoderCallback, public SideChainWor
 
     void writeCueLine();
 
-    ConfigObject<ConfigValue>* m_config;
-    Encoder* m_encoder;
+    ConfigObject<ConfigValue>* m_pConfig;
+    Encoder* m_pEncoder;
     QByteArray m_OGGquality;
     QByteArray m_MP3quality;
-    QByteArray m_Encoding;
-    QString m_filename;
+    QByteArray m_encoding;
+    QString m_fileName;
     QByteArray m_baTitle;
     QByteArray m_baAuthor;
     QByteArray m_baAlbum;
 
     QFile m_file;
-    QFile m_cuefile;
-    QDataStream m_datastream;
-    SNDFILE *m_sndfile;
+    QFile m_cueFile;
+    QDataStream m_dataStream;
+    SNDFILE* m_pSndfile;
     SF_INFO m_sfInfo;
 
-    ControlObjectThread* m_recReady;
-    ControlObjectThread* m_samplerate;
+    ControlObjectSlave* m_pRecReady;
+    ControlObjectSlave* m_pSamplerate;
+    quint64 m_frames;
+    quint64 m_sampleRate;
+    quint64 m_recordedDuration;
+    QString getRecordedDurationStr();
 
     int m_iMetaDataLife;
     TrackPointer m_pCurrentTrack;
 
-    QByteArray m_cuefilename;
-    quint64 m_cuesamplepos;
-    quint64 m_cuetrack;
+    QByteArray m_cueFileName;
+    quint64 m_cueTrack;
     bool m_bCueIsEnabled;
 };
 

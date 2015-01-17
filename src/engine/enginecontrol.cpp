@@ -6,9 +6,9 @@
 #include "engine/enginebuffer.h"
 #include "playermanager.h"
 
-EngineControl::EngineControl(const char * _group,
-                             ConfigObject<ConfigValue> * _config)
-        : m_pGroup(_group),
+EngineControl::EngineControl(QString group,
+                             ConfigObject<ConfigValue>* _config)
+        : m_group(group),
           m_pConfig(_config),
           m_dTotalSamples(0),
           m_pEngineMaster(NULL),
@@ -21,9 +21,9 @@ EngineControl::~EngineControl() {
 }
 
 double EngineControl::process(const double,
-                               const double,
-                               const double,
-                               const int) {
+                              const double,
+                              const double,
+                              const int) {
     return kNoTrigger;
 }
 
@@ -47,7 +47,7 @@ void EngineControl::trackLoaded(TrackPointer) {
 void EngineControl::trackUnloaded(TrackPointer) {
 }
 
-void EngineControl::hintReader(QVector<Hint>*) {
+void EngineControl::hintReader(HintVector*) {
 }
 
 void EngineControl::setEngineMaster(EngineMaster* pEngineMaster) {
@@ -71,8 +71,8 @@ double EngineControl::getTotalSamples() const {
     return m_dTotalSamples;
 }
 
-const char* EngineControl::getGroup() {
-    return m_pGroup;
+QString EngineControl::getGroup() const {
+    return m_group;
 }
 
 ConfigObject<ConfigValue>* EngineControl::getConfig() {
@@ -90,6 +90,12 @@ EngineBuffer* EngineControl::getEngineBuffer() {
 void EngineControl::seekAbs(double fractionalPosition) {
     if (m_pEngineBuffer) {
         m_pEngineBuffer->slotControlSeekAbs(fractionalPosition);
+    }
+}
+
+void EngineControl::seekExact(double fractionalPosition) {
+    if (m_pEngineBuffer) {
+        m_pEngineBuffer->slotControlSeekExact(fractionalPosition);
     }
 }
 
@@ -123,7 +129,7 @@ EngineBuffer* EngineControl::pickSyncTarget() {
             EngineBuffer* pBuffer = pChannel->getEngineBuffer();
             if (pBuffer && pBuffer->getBpm() > 0) {
                 // If the deck is playing then go with it immediately.
-                if (fabs(pBuffer->getRate()) > 0) {
+                if (fabs(pBuffer->getSpeed()) > 0) {
                     return pBuffer;
                 }
                 // Otherwise hold out for a deck that might be playing but

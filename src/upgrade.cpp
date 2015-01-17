@@ -16,25 +16,27 @@
 ***************************************************************************/
 
 #include <QPixmap>
-#include <QtCore>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QTranslator>
+
 #include "defs_version.h"
 #include "controllers/defs_controllers.h"
 #include "track/beat_preferences.h"
+#include "library/trackcollection.h"
+#include "library/library_preferences.h"
+#include "util/math.h"
 #include "configobject.h"
 #include "upgrade.h"
 
 
 Upgrade::Upgrade()
-{
-    m_bFirstRun = false;
-    m_bUpgraded = false;
+        : m_bFirstRun(false),
+          m_bUpgraded(false),
+          m_bRescanLibrary(false) {
 }
 
-Upgrade::~Upgrade()
-{
-
+Upgrade::~Upgrade() {
 }
 
 // We return the ConfigObject here because we have to make changes to the
@@ -325,13 +327,42 @@ ConfigObject<ConfigValue>* Upgrade::versionUpgrade(const QString& settingsPath) 
             qDebug() << "Upgrade Failed";
         }
     }
-    // Next applicable release goes here
-    /*
+
     if (configVersion.startsWith("1.11")) {
         qDebug() << "Upgrading from v1.11.x...";
 
-        // Upgrade tasks go here
+        // upgrade to the multi library folder settings
+        QString currentFolder = config->getValueString(PREF_LEGACY_LIBRARY_DIR);
+        // to migrate the DB just add the current directory to the new
+        // directories table
+        TrackCollection tc(config);
+        DirectoryDAO directoryDAO = tc.getDirectoryDAO();
 
+        // NOTE(rryan): We don't have to ask for sandbox permission to this
+        // directory because the normal startup integrity check in Library will
+        // notice if we don't have permission and ask for access. Also, the
+        // Sandbox isn't setup yet at this point in startup because it relies on
+        // the config settings path and this function is what loads the config
+        // so it's not ready yet.
+        bool successful = directoryDAO.addDirectory(currentFolder);
+
+        // ask for library rescan to activate cover art. We can later ask for
+        // this variable when the library scanner is constructed.
+        m_bRescanLibrary = askReScanLibrary();
+
+        // Versions of mixxx until 1.11 had a hack that multiplied gain by 1/2,
+        // which was compensation for another hack that set replaygain to a
+        // default of 6.  We've now removed all of the hacks, so subtracting
+        // 6 from everyone's replay gain should keep things consistent for
+        // all users.
+        int oldReplayGain = config->getValueString(
+                ConfigKey("[ReplayGain]", "InitialReplayGainBoost"), "6").toInt();
+        int newReplayGain = math_max(-6, oldReplayGain - 6);
+        config->set(ConfigKey("[ReplayGain]", "InitialReplayGainBoost"),
+                    ConfigValue(newReplayGain));
+
+        // if everything until here worked fine we can mark the configuration as
+        // updated
         if (successful) {
             configVersion = VERSION;
             m_bUpgraded = true;
@@ -341,7 +372,6 @@ ConfigObject<ConfigValue>* Upgrade::versionUpgrade(const QString& settingsPath) 
             qDebug() << "Upgrade failed!\n";
         }
     }
-    */
 
     if (configVersion == VERSION) qDebug() << "Configuration file is now at the current version" << VERSION;
     else {
@@ -356,6 +386,21 @@ ConfigObject<ConfigValue>* Upgrade::versionUpgrade(const QString& settingsPath) 
     }
 
     return config;
+}
+
+bool Upgrade::askReScanLibrary() {
+    QMessageBox msgBox;
+    msgBox.setIconPixmap(QPixmap(":/images/mixxx-icon.png"));
+    msgBox.setWindowTitle(QMessageBox::tr("Upgrading Mixxx"));
+    msgBox.setText(QMessageBox::tr("Mixxx now supports displaying cover art.\n"
+                      "Do you want to scan your library for cover files now?"));
+    QPushButton* rescanButton = msgBox.addButton(
+        QMessageBox::tr("Scan"), QMessageBox::AcceptRole);
+    msgBox.addButton(QMessageBox::tr("Later"), QMessageBox::RejectRole);
+    msgBox.setDefaultButton(rescanButton);
+    msgBox.exec();
+
+    return msgBox.clickedButton() == rescanButton;
 }
 
 bool Upgrade::askReanalyzeBeats() {

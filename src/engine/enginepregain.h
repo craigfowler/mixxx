@@ -21,25 +21,27 @@
 #include "controlobject.h"
 #include "util/performancetimer.h"
 
-class ControlLogpotmeter;
+class ControlAudioTaperPot;
 class ControlPotmeter;
 class ControlObject;
-class EnginePregain : public EngineObject
-{
-public:
-    EnginePregain( const char *group);
-    ~EnginePregain();
-    void process(const CSAMPLE *pIn, const CSAMPLE *pOut, const int iBufferSize);
 
+class EnginePregain : public EngineObject {
+  public:
+    EnginePregain(QString group);
+    virtual ~EnginePregain();
 
-private:
+    void setSpeed(double speed);
+    void process(CSAMPLE* pInOut, const int iBufferSize);
+
+  private:
+    double m_dSpeed;
     float m_fPrevGain;
-    ControlLogpotmeter *potmeterPregain;
-    ControlObject *m_pTotalGain;
-    ControlObject *m_pControlReplayGain;
-    ControlObject *m_pPassthroughEnabled;
-    static ControlPotmeter *s_pReplayGainBoost;
-    static ControlObject *s_pEnableReplayGain;
+    ControlAudioTaperPot* m_pPotmeterPregain;
+    ControlObject* m_pTotalGain;
+    ControlObject* m_pControlReplayGain;
+    ControlObject* m_pPassthroughEnabled;
+    static ControlPotmeter* s_pReplayGainBoost;
+    static ControlObject* s_pEnableReplayGain;
     bool m_bSmoothFade;
     PerformanceTimer m_timer;
 };

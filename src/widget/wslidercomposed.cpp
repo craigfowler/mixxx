@@ -15,27 +15,20 @@
 *                                                                         *
 ***************************************************************************/
 
-#include "wslidercomposed.h"
-#include <qpixmap.h>
+#include "widget/wslidercomposed.h"
+
 #include <QtDebug>
-#include <qpainter.h>
-//Added by qt3to4:
-#include <QMouseEvent>
-#include <QPaintEvent>
-#include <QPainter>
-#include "defs.h"
-#include "wpixmapstore.h"
+#include <QStylePainter>
+#include <QStyleOption>
+
+#include "widget/wpixmapstore.h"
+#include "widget/controlwidgetconnection.h"
+#include "util/debug.h"
+#include "util/math.h"
 
 WSliderComposed::WSliderComposed(QWidget * parent)
-    : WAbstractControl(parent),
-      m_iPos(0),
-      m_iStartHandlePos(0),
-      m_iStartMousePos(0),
-      m_iSliderLength(0),
-      m_iHandleLength(0),
-      m_bHorizontal(false),
-      m_bEventWhileDrag(true),
-      m_bDrag(false),
+    : WWidget(parent),
+      m_dHandleLength(0),
       m_pSlider(NULL),
       m_pHandle(NULL) {
 }
@@ -44,188 +37,171 @@ WSliderComposed::~WSliderComposed() {
     unsetPixmaps();
 }
 
-void WSliderComposed::setup(QDomNode node) {
+void WSliderComposed::setup(QDomNode node, const SkinContext& context) {
     // Setup pixmaps
-    QString pathSlider = getPath(selectNodeQString(node, "Slider"));
-    QString pathHandle = getPath(selectNodeQString(node, "Handle"));
-    QString pathHorizontal = selectNodeQString(node, "Horizontal");
-    bool h = false;
-    if (pathHorizontal.contains("true",Qt::CaseInsensitive)) {
-        h = true;
-    }
-    setPixmaps(h, pathSlider, pathHandle);
+    unsetPixmaps();
 
-    if (!selectNode(node, "EventWhileDrag").isNull()) {
-        if (selectNodeQString(node, "EventWhileDrag").contains("no")) {
-            m_bEventWhileDrag = false;
+    if (context.hasNode(node, "Slider")) {
+        QDomElement slider = context.selectElement(node, "Slider");
+        // The implicit default in <1.12.0 was FIXED so we keep it for backwards
+        // compatibility.
+        PixmapSource sourceSlider = context.getPixmapSource(slider);
+        setSliderPixmap(sourceSlider, context.selectScaleMode(slider, Paintable::FIXED));
+    }
+
+    m_dSliderLength = m_bHorizontal ? width() : height();
+    m_handler.setSliderLength(m_dSliderLength);
+
+    QDomElement handle = context.selectElement(node, "Handle");
+    PixmapSource sourceHandle = context.getPixmapSource(handle);
+    bool h = context.selectBool(node, "Horizontal", false);
+    // The implicit default in <1.12.0 was FIXED so we keep it for backwards
+    // compatibility.
+    setHandlePixmap(h, sourceHandle,
+                    context.selectScaleMode(handle, Paintable::FIXED));
+
+    if (context.hasNode(node, "EventWhileDrag")) {
+        if (context.selectString(node, "EventWhileDrag").contains("no")) {
+            m_handler.setEventWhileDrag(false);
+        }
+    }
+    if (!m_connections.isEmpty()) {
+        ControlParameterWidgetConnection* defaultConnection = m_connections.at(0);
+        if (defaultConnection) {
+            if (defaultConnection->getEmitOption() &
+                    ControlParameterWidgetConnection::EMIT_DEFAULT) {
+                // ON_PRESS means here value change on mouse move during press
+                defaultConnection->setEmitOption(
+                        ControlParameterWidgetConnection::EMIT_ON_PRESS_AND_RELEASE);
+            }
         }
     }
 }
 
-void WSliderComposed::setPixmaps(bool bHorizontal, const QString &filenameSlider, const QString &filenameHandle) {
-    m_bHorizontal = bHorizontal;
-    unsetPixmaps();
-    m_pSlider = WPixmapStore::getPixmap(filenameSlider);
+void WSliderComposed::setSliderPixmap(PixmapSource sourceSlider,
+                                      Paintable::DrawMode drawMode) {
+    m_pSlider = WPixmapStore::getPaintable(sourceSlider, drawMode);
     if (!m_pSlider) {
-        qDebug() << "WSliderComposed: Error loading slider pixmap:" << filenameSlider;
-    }
-    m_pHandle = WPixmapStore::getPixmap(filenameHandle);
-    if (!m_pHandle) {
-        qDebug() << "WSliderComposed: Error loading handle pixmap:" << filenameHandle;
-    }
-
-    if (m_pSlider && m_pHandle) {
-        if (m_bHorizontal) {
-            m_iSliderLength = m_pSlider->width();
-            m_iHandleLength = m_pHandle->width();
-        } else {
-            m_iSliderLength = m_pSlider->height();
-            m_iHandleLength = m_pHandle->height();
-        }
-
+        qDebug() << "WSliderComposed: Error loading slider pixmap:" << sourceSlider.getPath();
+    } else if (drawMode == Paintable::FIXED) {
         // Set size of widget, using size of slider pixmap
-        if (m_pSlider) {
-            setFixedSize(m_pSlider->size());
-        }
+        setFixedSize(m_pSlider->size());
+    }
+}
 
-        setValue(m_value);
-
-        repaint();
+void WSliderComposed::setHandlePixmap(bool bHorizontal,
+                                      PixmapSource sourceHandle,
+                                      Paintable::DrawMode mode) {
+    m_bHorizontal = bHorizontal;
+    m_handler.setHorizontal(m_bHorizontal);
+    m_pHandle = WPixmapStore::getPaintable(sourceHandle, mode);
+    m_dHandleLength = calculateHandleLength();
+    m_handler.setHandleLength(m_dHandleLength);
+    if (!m_pHandle) {
+        qDebug() << "WSliderComposed: Error loading handle pixmap:" << sourceHandle.getPath();
+    } else {
+        // Value is unused in WSliderComposed.
+        onConnectedControlChanged(getControlParameter(), 0);
+        update();
     }
 }
 
 void WSliderComposed::unsetPixmaps() {
-    if (m_pSlider) {
-        WPixmapStore::deletePixmap(m_pSlider);
-        m_pSlider = NULL;
-    }
-    if (m_pHandle) {
-        WPixmapStore::deletePixmap(m_pHandle);
-        m_pHandle = NULL;
-    }
+    m_pSlider.clear();
+    m_pHandle.clear();
 }
 
 void WSliderComposed::mouseMoveEvent(QMouseEvent * e) {
-    if (!m_bRightButtonPressed) {
-        if (m_bHorizontal) {
-            m_iPos = e->x() - m_iHandleLength / 2;
-        } else {
-            m_iPos = e->y() - m_iHandleLength / 2;
-        }
-
-        //qDebug() << "start " << m_iStartPos << ", pos " << m_iPos;
-        m_iPos = m_iStartHandlePos + (m_iPos - m_iStartMousePos);
-
-        if (m_iPos > (m_iSliderLength - m_iHandleLength)) {
-            m_iPos = m_iSliderLength - m_iHandleLength;
-        } else if (m_iPos < 0) {
-            m_iPos = 0;
-        }
-
-        // value ranges from 0 to 127
-        m_value = (double)m_iPos * (127. / (double)(m_iSliderLength - m_iHandleLength));
-        if (!m_bHorizontal) {
-            m_value = 127. - m_value;
-        }
-
-        // Emit valueChanged signal
-        if (m_bEventWhileDrag) {
-            if (e->button() == Qt::RightButton) {
-                emit(valueChangedRightUp(m_value));
-            } else {
-                emit(valueChangedLeftUp(m_value));
-            }
-        }
-
-        // Update display
-        update();
-    }
+    m_handler.mouseMoveEvent(this, e);
 }
 
 void WSliderComposed::wheelEvent(QWheelEvent *e) {
-    double wheelDirection = ((QWheelEvent *)e)->delta() / 120.;
-    double newValue = getValue() + (wheelDirection);
-    this->updateValue(newValue);
-
-    e->accept();
-
-    //e->ignore();
+    m_handler.wheelEvent(this, e);
 }
 
 void WSliderComposed::mouseReleaseEvent(QMouseEvent * e) {
-    if (!m_bEventWhileDrag) {
-        mouseMoveEvent(e);
-
-        if (e->button() == Qt::RightButton) {
-            emit(valueChangedRightUp(m_value));
-        } else {
-            emit(valueChangedLeftUp(m_value));
-        }
-
-        m_bDrag = false;
-    }
-    if (e->button() == Qt::RightButton) {
-        m_bRightButtonPressed = false;
-    }
+    m_handler.mouseReleaseEvent(this, e);
 }
 
 void WSliderComposed::mousePressEvent(QMouseEvent * e) {
-    if (!m_bEventWhileDrag) {
-        m_iStartMousePos = 0;
-        m_iStartHandlePos = 0;
-        mouseMoveEvent(e);
-        m_bDrag = true;
-    } else {
-        if (e->button() == Qt::RightButton) {
-            emit(valueReset());
-            m_bRightButtonPressed = true;
-        } else {
-            if (m_bHorizontal) {
-                m_iStartMousePos = e->x() - m_iHandleLength / 2;
-            } else {
-                m_iStartMousePos = e->y() - m_iHandleLength / 2;
-            }
-            m_iStartHandlePos = m_iPos;
-        }
-    }
+    m_handler.mousePressEvent(this, e);
 }
 
 void WSliderComposed::paintEvent(QPaintEvent *) {
-    if (m_pSlider && m_pHandle) {
-        QPainter p(this);
-        int posx;
-        int posy;
-        if (m_bHorizontal) {
-            posx = m_iPos;
-            posy = 0;
-        } else {
-            posx = 0;
-            posy = m_iPos;
-        }
+    QStyleOption option;
+    option.initFrom(this);
+    QStylePainter p(this);
+    p.drawPrimitive(QStyle::PE_Widget, option);
 
-        // Draw slider followed by handle
-        p.drawPixmap(0, 0, *m_pSlider);
-        p.drawPixmap(posx, posy, *m_pHandle);
+    if (!m_pSlider.isNull() && !m_pSlider->isNull()) {
+        m_pSlider->draw(rect(), &p);
+    }
+
+    if (!m_pHandle.isNull() && !m_pHandle->isNull()) {
+        double drawPos = m_handler.parameterToPosition(getControlParameterDisplay());
+        if (m_bHorizontal) {
+            // The handle's draw mode determines whether it is stretched.
+            QRectF targetRect(drawPos, 0, m_dHandleLength, height());
+            m_pHandle->draw(targetRect, &p);
+        } else {
+            // The handle's draw mode determines whether it is stretched.
+            QRectF targetRect(0, drawPos, width(), m_dHandleLength);
+            m_pHandle->draw(targetRect, &p);
+        }
     }
 }
 
-void WSliderComposed::setValue(double fValue) {
-    if (!m_bDrag && m_value != fValue) {
-        // Set value without emitting a valueChanged signal
-        // and force display update
-        m_value = fValue;
+void WSliderComposed::resizeEvent(QResizeEvent* pEvent) {
+    Q_UNUSED(pEvent);
 
-        // Calculate handle position
-        if (!m_bHorizontal) {
-            fValue = 127-fValue;
-        }
-        m_iPos = (int)((fValue / 127.) * (double)(m_iSliderLength - m_iHandleLength));
+    m_dHandleLength = calculateHandleLength();
+    m_handler.setHandleLength(m_dHandleLength);
+    m_dSliderLength = m_bHorizontal ? width() : height();
+    m_handler.setSliderLength(m_dSliderLength);
+    m_handler.resizeEvent(this, pEvent);
 
-        if (m_iPos > (m_iSliderLength - m_iHandleLength)) {
-            m_iPos = m_iSliderLength - m_iHandleLength;
-        } else if (m_iPos < 0) {
-            m_iPos = 0;
+    // Re-calculate state based on our new width/height.
+    onConnectedControlChanged(getControlParameter(), 0);
+}
+
+void WSliderComposed::onConnectedControlChanged(double dParameter, double) {
+    m_handler.onConnectedControlChanged(this, dParameter);
+}
+
+void WSliderComposed::fillDebugTooltip(QStringList* debug) {
+    WWidget::fillDebugTooltip(debug);
+    int sliderLength = m_bHorizontal ? width() : height();
+    *debug << QString("Horizontal: %1").arg(toDebugString(m_bHorizontal))
+           << QString("SliderPosition: %1").arg(
+                   m_handler.parameterToPosition(getControlParameterDisplay()))
+           << QString("SliderLength: %1").arg(sliderLength)
+           << QString("HandleLength: %1").arg(m_dHandleLength);
+}
+
+double WSliderComposed::calculateHandleLength() {
+    if (m_pHandle) {
+        Paintable::DrawMode mode = m_pHandle->drawMode();
+        if (m_bHorizontal) {
+            // Stretch the pixmap to be the height of the widget.
+            if (mode == Paintable::FIXED || mode == Paintable::STRETCH ||
+                    mode == Paintable::TILE || m_pHandle->height() == 0.0) {
+                return m_pHandle->width();
+            } else if (mode == Paintable::STRETCH_ASPECT) {
+                const qreal aspect = static_cast<double>(m_pHandle->width()) /
+                        static_cast<double>(m_pHandle->height());
+                return aspect * height();
+            }
+        } else {
+            // Stretch the pixmap to be the width of the widget.
+            if (mode == Paintable::FIXED || mode == Paintable::STRETCH ||
+                    mode == Paintable::TILE || m_pHandle->width() == 0.0) {
+                return m_pHandle->height();
+            } else if (mode == Paintable::STRETCH_ASPECT) {
+                const qreal aspect = static_cast<double>(m_pHandle->height()) /
+                        static_cast<double>(m_pHandle->width());
+                return aspect * width();
+            }
         }
-        update();
     }
+    return 0;
 }

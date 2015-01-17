@@ -21,14 +21,19 @@ from it and overwrite the parse function and add class specific functions to
 it afterwards fro proper functioning
 **/
 
-#include <qobject.h>
-#include <qstring.h>
-#include <qfile.h>
+#include <QObject>
+#include <QString>
+#include <QList>
 
+class Parser : public QObject {
+  public:
+    static bool isPlaylistFilenameSupported(const QString& fileName) {
+        return fileName.endsWith(".m3u", Qt::CaseInsensitive) ||
+                fileName.endsWith(".m3u8", Qt::CaseInsensitive) ||
+                fileName.endsWith(".pls", Qt::CaseInsensitive) ||
+                fileName.endsWith(".csv", Qt::CaseInsensitive);
+    }
 
-class Parser : public QObject
-{
-public:
     Parser();
     ~Parser();
     /**Can be called to parse a pls file
@@ -48,7 +53,7 @@ protected:
     /**Checks if the file does contain binary content**/
     bool isBinary(QString);
     /**Checks if the given string represents a local filepath**/
-    bool isFilepath(QString );
+    bool isFilepath(QString);
     // check for Utf8 encoding
     static bool isUtf8(const char* string);
 };

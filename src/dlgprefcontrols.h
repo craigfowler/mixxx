@@ -18,33 +18,40 @@
 #ifndef DLGPREFCONTROLS_H
 #define DLGPREFCONTROLS_H
 
+#include <QWidget>
+
 #include "ui_dlgprefcontrolsdlg.h"
 #include "configobject.h"
+#include "preferences/dlgpreferencepage.h"
 
-class QWidget;
-class ControlObjectThreadMain;
+class ControlObjectSlave;
+class ControlObjectThread;
 class ControlPotmeter;
 class SkinLoader;
 class PlayerManager;
-class MixxxApp;
+class MixxxMainWindow;
 class ControlObject;
 
 /**
   *@author Tue & Ken Haste Andersen
   */
 
-class DlgPrefControls : public QWidget, public Ui::DlgPrefControlsDlg  {
+class DlgPrefControls : public DlgPreferencePage, public Ui::DlgPrefControlsDlg  {
     Q_OBJECT
-public:
-    DlgPrefControls(QWidget *parent, MixxxApp *mixxx,
+  public:
+    DlgPrefControls(QWidget *parent, MixxxMainWindow *mixxx,
                     SkinLoader* pSkinLoader, PlayerManager* pPlayerManager,
                     ConfigObject<ConfigValue> *pConfig);
-    ~DlgPrefControls();
+    virtual ~DlgPrefControls();
 
-public slots:
+  public slots:
     void slotUpdate();
+    void slotApply();
+    void slotResetToDefaults();
+
     void slotSetRateRange(int pos);
     void slotSetRateDir(int pos);
+    void slotKeylockMode(int pos);
     void slotSetRateTempLeft(double);
     void slotSetRateTempRight(double);
     void slotSetRatePermLeft(double);
@@ -58,49 +65,38 @@ public slots:
     void slotSetAllowTrackLoadToPlayingDeck(int);
     void slotSetCueDefault(int);
     void slotSetCueRecall(int);
-    void slotSetAutoDjRequeue(int);
-    void slotSetAutoDjMinimumAvailable(int);
-    void slotSetAutoDjUseIgnoreTime(int);
-    void slotSetAutoDjIgnoreTime(const QTime &a_rTime);
     void slotSetRateRamp(bool);
     void slotSetRateRampSensitivity(int);
     void slotSetLocale(int);
-    void slotApply();
+    void slotSetStartInFullscreen(int index);
 
-    void slotSetFrameRate(int frameRate);
-    void slotSetWaveformType(int index);
-    void slotSetWaveformOverviewType(int index);
-    void slotSetDefaultZoom(int index);
-    void slotSetZoomSynchronization(bool checked);
-    void slotSetVisualGainAll(double gain);
-    void slotSetVisualGainLow(double gain);
-    void slotSetVisualGainMid(double gain);
-    void slotSetVisualGainHigh(double gain);
-    void slotSetNormalizeOverview( bool normalize);
+    void slotNumDecksChanged(double);
+    void slotNumSamplersChanged(double);
+    
+    void slotUpdateSpeedAutoReset(int);
 
-    virtual void onShow();
-    virtual void onHide();
-
-protected:
-    void timerEvent(QTimerEvent *);
-
-private:
-    void initWaveformControl();
+  private:
     void notifyRebootNecessary();
     bool checkSkinResolution(QString skin);
 
-private:
-    /** Pointer to ConfigObject */
-    ConfigObject<ConfigValue> *m_pConfig;
-    int m_timer;
+    ConfigObject<ConfigValue>* m_pConfig;
     ControlObject* m_pControlPositionDisplay;
-    QList<ControlObjectThreadMain*> m_cueControls;
-    QList<ControlObjectThreadMain*> m_rateControls;
-    QList<ControlObjectThreadMain*> m_rateDirControls;
-    QList<ControlObjectThreadMain*> m_rateRangeControls;
-    PlayerManager* m_pPlayerManager;
-    MixxxApp *m_mixxx;
+    ControlObjectSlave* m_pNumDecks;
+    ControlObjectSlave* m_pNumSamplers;
+    QList<ControlObjectThread*> m_cueControls;
+    QList<ControlObjectThread*> m_rateControls;
+    QList<ControlObjectThread*> m_rateDirControls;
+    QList<ControlObjectThread*> m_rateRangeControls;
+    QList<ControlObjectThread*> m_keylockModeControls;
+    MixxxMainWindow *m_mixxx;
     SkinLoader* m_pSkinLoader;
+    PlayerManager* m_pPlayerManager;
+
+    int m_iNumConfiguredDecks;
+    int m_iNumConfiguredSamplers;
+    
+    int m_speedAutoReset;
+    int m_keylockMode;
 };
 
 #endif

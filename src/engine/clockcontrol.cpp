@@ -4,21 +4,23 @@
 #include "configobject.h"
 #include "cachingreader.h"
 #include "engine/enginecontrol.h"
+#include "controlobjectslave.h"
 
-ClockControl::ClockControl(const char* pGroup, ConfigObject<ConfigValue>* pConfig)
-        : EngineControl(pGroup, pConfig) {
-    m_pCOBeatActive = new ControlObject(ConfigKey(pGroup, "beat_active"));
-    m_pCOBeatActive->set(0.0f);
-    m_pCOSampleRate = ControlObject::getControl(ConfigKey("[Master]","samplerate"));
+ClockControl::ClockControl(QString group, ConfigObject<ConfigValue>* pConfig)
+        : EngineControl(group, pConfig) {
+    m_pCOBeatActive = new ControlObject(ConfigKey(group, "beat_active"));
+    m_pCOBeatActive->set(0.0);
+    m_pCOSampleRate = new ControlObjectSlave("[Master]","samplerate");
 }
 
 ClockControl::~ClockControl() {
     delete m_pCOBeatActive;
+    delete m_pCOSampleRate;
 }
 
 void ClockControl::trackLoaded(TrackPointer pTrack) {
     // Clear on-beat control
-    m_pCOBeatActive->set(0.0f);
+    m_pCOBeatActive->set(0.0);
 
     // Disconnect any previously loaded track/beats
     if (m_pTrack) {

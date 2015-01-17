@@ -3,7 +3,13 @@
                           soundsourceffmpeg.cpp -  ffmpeg decoder
                              -------------------
     copyright            : (C) 2007 by Cedric GESTES
-    email                : ctaf42@gmail.com
+                           (C) 2012-2014 by Tuukka Pasanen
+    email                : tuukka.pasanen@ilmi.fi
+
+    This one tested with FFMPEG 0.10/0.11/1.0/1.1/1.2/2,0/2,1/GIT
+                         Libav  0.8/9/GIT
+    FFMPEG below 0.10 WON'T work. If you like to it work you can
+    allways send a patch but it's mostly not worth it!
 ***************************************************************************/
 
 /***************************************************************************
@@ -17,407 +23,662 @@
 
 #include "trackinfoobject.h"
 #include "soundsourceffmpeg.h"
-//#ifdef __WINDOWS__
-//#include <io.h>
-//#include <fcntl.h>
-//#endif
 
-// GED's notes - 2007-09-09
-// sudo aptitude install libavcodec-dev libavformat-dev liba52-dev libdts-dev
-// add '#include <QDebug> to fix qDebug' << "stuff" syntax.
-#include <QDebug>
+#include <QtDebug>
+#include <QBuffer>
 
 static QMutex ffmpegmutex;
-static bool ffmpeginit = false;
 
-/* TODO
- * - seek doesnt work correctly (seek is not precise for mp3)
- * - remove lock except for av_open/av_close
- * - do something like in soundbuffermp3 (keep a list of all frame for seeking)
- * - make ffmpeginit a singleton
- * DTS is not always updated, (maybe only after an av_seek_frame)
- * - remove qdebug (it slow down mixxx a lot)
- */
+#define SOUNDSOURCEFFMPEG_CACHESIZE 1000
+#define SOUNDSOURCEFFMPEG_POSDISTANCE ((1024 * 1000) / 8)
 
-static void FFmpegInit()
-{
-    if (!ffmpeginit) {
-        qDebug() << "Initialising avcodec/avformat";
-        av_register_all();
-        ffmpeginit = true;
-    }
+SoundSourceFFmpeg::SoundSourceFFmpeg(QString filename)
+    : SoundSource(filename),
+    m_iAudioStream(-1),
+    m_filelength(-1),
+    m_pFormatCtx(NULL),
+    m_pIformat(NULL),
+    m_pCodecCtx(NULL),
+    m_pCodec(NULL),
+    m_pResample(NULL),
+    m_iCurrentMixxTs(0),
+    m_bIsSeeked(false),
+    m_lCacheBytePos(0),
+    m_lCacheStartByte(0),
+    m_lCacheEndByte(0),
+    m_lCacheLastPos(0),
+    m_lLastStoredPos(0),
+    m_lStoredSeekPoint(-1) {
+    m_SCache.clear();
+    setType(filename.section(".",-1).toLower());
 }
 
-//TODO: handle error
-SoundSourceFFmpeg::SoundSourceFFmpeg(QString qFilename) : SoundSource(qFilename)
-{
-    AVFormatParameters param;
-    int i;
-    QByteArray fname;
+SoundSourceFFmpeg::~SoundSourceFFmpeg() {
+    struct ffmpegLocationObject *l_SRmJmp = NULL;
+    clearCache();
 
-    packet.data = NULL;
-    bufferOffset = 0;
-    bufferSize = 0;
-    memset(buffer, 0, AVCODEC_MAX_AUDIO_FRAME_SIZE);
-    fname = qFilename.toLatin1();
-    FFmpegInit();
-
-    qDebug() << "New SoundSourceFFmpeg :" << fname;
-
-    /* initialize param to something so av_open_input_file works for raw */
-    memset(&param, 0, sizeof(AVFormatParameters));
-    param.channels = 2;
-    param.sample_rate = 44100;
-
-    iformat = av_find_input_format(fname.constData());
-    // Open audio file
-    if(av_open_input_file(&pFormatCtx, fname.constData(), iformat, 0, &param)!=0) {
-        qDebug() << "av_open_input_file: cannot open" << fname;
-        return;
+    if (m_pCodecCtx != NULL) {
+        qDebug() << "~SoundSourceFFmpeg(): Clear FFMPEG stuff";
+        avcodec_close(m_pCodecCtx);
+        avformat_close_input(&m_pFormatCtx);
+        av_free(m_pFormatCtx);
     }
 
-    // Retrieve stream information
-    if(av_find_stream_info(pFormatCtx)<0) {
-        qDebug() << "av_find_stream_info: cannot open" << fname;
-        return;
+    if (m_pResample != NULL) {
+        qDebug() << "~SoundSourceFFmpeg(): Delete FFMPEG Resampler";
+        delete m_pResample;
     }
-    //debug only
-    dump_format(pFormatCtx, 0, fname.constData(), false);
 
-    qDebug() << "ffmpeg: using the first audio stream available";
-    // Find the first video stream
-    audioStream=-1;
-    for(i=0; i<pFormatCtx->nb_streams; i++)
-        if(pFormatCtx->streams[i]->codec->codec_type==CODEC_TYPE_AUDIO) {
-            audioStream=i;
+    while (m_SJumpPoints.size() > 0) {
+        l_SRmJmp = m_SJumpPoints[0];
+        m_SJumpPoints.remove(0);
+        free(l_SRmJmp);
+    }
+
+}
+
+AVCodecContext *SoundSourceFFmpeg::getCodecContext() {
+    return m_pCodecCtx;
+}
+
+AVFormatContext *SoundSourceFFmpeg::getFormatContext() {
+    return m_pFormatCtx;
+}
+
+int SoundSourceFFmpeg::getAudioStreamIndex() {
+    return m_iAudioStream;
+}
+
+void SoundSourceFFmpeg::lock() {
+    ffmpegmutex.lock();
+}
+
+void SoundSourceFFmpeg::unlock() {
+    ffmpegmutex.unlock();
+}
+
+bool SoundSourceFFmpeg::clearCache() {
+    struct ffmpegCacheObject *l_SRmObj = NULL;
+
+    while (m_SCache.size() > 0) {
+        l_SRmObj = m_SCache[0];
+        m_SCache.remove(0);
+        free(l_SRmObj->bytes);
+        free(l_SRmObj);
+    }
+
+    return true;
+}
+
+bool SoundSourceFFmpeg::readFramesToCache(unsigned int count, qint64 offset) {
+    unsigned int l_iCount = 0;
+    qint32 l_iRet = 0;
+    AVPacket l_SPacket;
+    AVFrame *l_pFrame = NULL;
+    bool l_iStop = false;
+    int l_iFrameFinished = 0;
+    struct ffmpegCacheObject *l_SObj = NULL;
+    struct ffmpegCacheObject *l_SRmObj = NULL;
+    bool m_bUnique = false;
+    qint64 l_lLastPacketPos = -1;
+    int l_iError = 0;
+    int l_iFrameCount = 0;
+
+    l_iCount = count;
+
+    l_SPacket.data = NULL;
+    l_SPacket.size = 0;
+
+
+    while (l_iCount > 0) {
+        if (l_pFrame != NULL) {
+          l_iFrameCount --;
+// FFMPEG 2.2 3561060 anb beyond
+#if LIBAVCODEC_VERSION_INT >= 3561060
+            av_frame_free(&l_pFrame);
+// FFMPEG 0.11 and below
+#elif LIBAVCODEC_VERSION_INT <= 3544932
+            av_free(l_pFrame);
+// FFMPEG 1.0 - 2.1
+#else
+            avcodec_free_frame(&l_pFrame);
+#endif
+            l_pFrame = NULL;
+
+        }
+
+        if (l_iStop == true) {
             break;
         }
-    if(audioStream==-1) {
-        qDebug() << "cannot find an audio stream: cannot open" << fname;
-        return;
-    }
+        l_iFrameCount ++;
+        av_init_packet(&l_SPacket);
+#if LIBAVCODEC_VERSION_INT < 3617792
+        l_pFrame = avcodec_alloc_frame();
+#else
+        l_pFrame = av_frame_alloc();
+#endif
 
-    // Get a pointer to the codec context for the video stream
-    pCodecCtx=pFormatCtx->streams[audioStream]->codec;
-
-    // Find the decoder for the audio stream
-    if(!(pCodec=avcodec_find_decoder(pCodecCtx->codec_id))) {
-        qDebug() << "cannot find a decoder for" << fname;
-        return;
-    }
-
-    qDebug() << "ffmpeg: opening the audio codec";
-    //avcodec_open is not thread safe
-    lock();
-    if(avcodec_open(pCodecCtx, pCodec)<0) {
-        qDebug() << "avcodec: cannot open" << fname;
-        return;
-    }
-    unlock();
-
-    pFrame=avcodec_alloc_frame();
-    channels = pCodecCtx->channels;
-    SRATE = pCodecCtx->sample_rate;
-
-    qDebug() << "Samplerate: " << SRATE << ", Channels: " << channels << "\n";
-    if(channels > 2){
-        qDebug() << "ffmpeg: No support for more than 2 channels!";
-        return;
-    }
-    filelength = (long int) ((double)pFormatCtx->duration * 2 / AV_TIME_BASE * SRATE);
-
-    qDebug() << "ffmpeg: filelength: " << filelength << "d -|- duration: " << pFormatCtx->duration << "ld -- starttime: " << pFormatCtx->streams[audioStream]->start_time << "ld -- " << AV_TIME_BASE << " " << pFormatCtx->streams[audioStream]->codec_info_duration << "ld";
-}
-
-SoundSourceFFmpeg::~SoundSourceFFmpeg()
-{
-    av_free(pFrame);
-    // Close the codec
-    lock();
-    avcodec_close(pCodecCtx);
-    unlock();
-    // Close the video file
-    av_close_input_file(pFormatCtx);
-};
-
-void SoundSourceFFmpeg::lock()
-{
-    //  qDebug() << "ffmpeg: Before lock";
-    ffmpegmutex.lock();
-    //qDebug() << "ffmpeg: After lock";
-}
-
-void SoundSourceFFmpeg::unlock()
-{
-    //qDebug() << "ffmpeg: Before unlock";
-    ffmpegmutex.unlock();
-    //qDebug() << "ffmpeg: After unlock";
-}
-
-long SoundSourceFFmpeg::ffmpeg2mixxx(long pos, const AVRational &time_base) {
-    return (long)((double)pos / (double)time_base.den * (double)SRATE * (double)2.);
-}
-
-long SoundSourceFFmpeg::mixxx2ffmpeg(long pos, const AVRational &time_base) {
-    return (long)((double)pos / (double)SRATE / (double)2. * (double)time_base.den);
-}
-
-
-/* PLAYGROUND */
-/*
-   REAL:
-   speedfreak
-   Debug: file length 28263168
-   nofreestyle
-   Debug: file length 23904000
-
-
-   speedfreak
-   ratio 1,014428253
-   Debug: ffmpeg: filelength: 28427212 -|- duration: 322304000 -- starttime: 0 -- 1000000
-   Debug: ffmpeg: Seek ERRORRRRRRRRr ret(-1) filepos(28837367).
-   Debug: file length 28427212
-   //audiostream=-1
-   Debug: ffmpeg: filelength: 28427212 -|- duration: 322304000 -- starttime: 0 -- 1000000
-   time base is 1/90000
-   Debug: ffmpeg: Seek ERRORRRRRRRRr ret(-1) filepos(320415184).
-   --
-   Debug: ffmpeg: filelength: 10342873 -|- duration: 117266144 -- starttime: 0 -- 1000000
-   Debug: ffmpeg: Seek ERRORRRRRRRRr ret(-1) filepos(10551289).
-   Debug: file length 10342873
-   seek to <filepos>
-
-   no free style
-   Debug: ffmpeg: filelength: 53174016 -|- duration: 602880000 -- starttime: 0 -- 1000000
-   time base is 1/90000
-   Debug: ffmpeg: Seek ERRORRRRRRRRr ret(-1) filepos(24389275).
-   //audistream = -1:
-   Debug: ffmpeg: filelength: 53174016 -|- duration: 602880000 -- starttime: 0 -- 1000000
-   time base is 1/90000
-   Debug: ffmpeg: Seek ERRORRRRRRRRr ret(-1) filepos(270991939).
- */
-/*
-   int 	avcodec_decode_audio (AVCodecContext *avctx, int16_t *samples, int *frame_size_ptr, uint8_t *buf, int buf_size)
-   int 	av_seek_frame (AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
-   Seek to the key frame at timestamp.
-   Decode an audio frame.
-   int 	av_seek_frame_binary (AVFormatContext *s, int stream_index, int64_t target_ts, int flags)
-   Does a binary search using av_index_search_timestamp() and AVCodec.read_timestamp().  */
-
-//   secs = filepos / SRATE / 2;
-//   mins = secs / 60;
-//   secs %= 60;
-//   hours = mins / 60;
-//   mins %= 60;
-/*for (fspos = 0; fspos < 602890000; fspos++){
-   ret = av_seek_frame(pFormatCtx, -1, fspos, 0);
-   if (ret){
-   qDebug() << "ffmpeg: Seek ERRORRRRRRRRr ret(" << ret << ") filepos(" << fspos << "d).";
-   fspos--;
-   ret = av_seek_frame(pFormatCtx, audioStream, fspos, 0);
-   readInput();
-   qDebug() << "ffmpeg: seek2EROR " << bufferOffset << " " << bufferSize << " " << packet.pos << "ld";
-   return 0;
-   }
-   }*/
-//  std::cout<< "time base is " << time_base.num << "/" << time_base.den << "\n";
-//  fspos = (long)((double)filepos / SRATE / 2 * AV_TIME_BASE);
-
-//  fspos2 = (long)((double)filepos / SRATE / 2 * time_base.den);
-
-long SoundSourceFFmpeg::seek(long filepos)
-{
-    int ret = 0;
-    int hours, mins, secs;
-    long fspos, diff;
-    AVRational time_base = pFormatCtx->streams[audioStream]->time_base;
-
-    lock();
-
-    fspos = mixxx2ffmpeg(filepos, time_base);
-    //  qDebug() << "ffmpeg: seek0.5 " << packet.pos << "ld -- " << packet.duration << " -- " << pFormatCtx->streams[audioStream]->cur_dts << "ld";
-    qDebug() << "ffmpeg: seek (ffpos " << fspos << "d) (mixxxpos " << filepos << "d)";
-
-    ret = av_seek_frame(pFormatCtx, audioStream, fspos, AVSEEK_FLAG_BACKWARD /*AVSEEK_FLAG_ANY*/);
-
-    if (ret){
-        qDebug() << "ffmpeg: Seek ERROR ret(" << ret << ") filepos(" << filepos << "d) at file"
-                 << m_qFilename;
-        unlock();
-        return 0;
-    }
-
-    readInput();
-    diff = ffmpeg2mixxx(fspos - pFormatCtx->streams[audioStream]->cur_dts, time_base);
-    qDebug() << "ffmpeg: seeked (dts " << pFormatCtx->streams[audioStream]->cur_dts << ") (diff " << diff << ") (diff " << fspos - pFormatCtx->streams[audioStream]->cur_dts << ")";
-
-    bufferOffset = 0; //diff;
-    if (bufferOffset > bufferSize) {
-        qDebug() << "ffmpeg: ERROR BAD OFFFFFFSET, buffsize: " << bufferSize << " offset: " << bufferOffset;
-        bufferOffset = 0;
-    }
-    unlock();
-    return filepos;
-}
-
-/*
- * internal function to only read one paquet
- */
-bool SoundSourceFFmpeg::readInput(){
-    char * dst;
-    unsigned char * src;
-    int ret = 0;
-    int readsize = 0;
-    int inputsize = 0;
-    int tries = 0;
-    //DEBUG
-    bufferSize = 0;
-    bufferOffset = 0;
-    memset(buffer, 0, AVCODEC_MAX_AUDIO_FRAME_SIZE);
-    while (av_read_packet(pFormatCtx, &packet)>0) {
-        if (packet.stream_index==audioStream){
-            dst = (char *)buffer;
-            src = packet.data;
-            inputsize = 0;
-            readsize = 0;
-            //qDebug() << "ffmpeg: before avcodec_decode_audio packet.size(" << packet.size << ")";
-            tries = 0;
-            do {
-                ret = avcodec_decode_audio(pCodecCtx, (int16_t *)dst, &readsize, src, packet.size - inputsize);
-                if (readsize == 0)
-                {
-                    tries++;
-                    //qDebug() << "ffmpeg: skip frame, decoded readsize = 0";
-                    break;
+        if (av_read_frame(m_pFormatCtx, &l_SPacket) >= 0) {
+            if (l_SPacket.stream_index == m_iAudioStream) {
+                if (m_lStoredSeekPoint > 0) {
+                    // Seek for correct jump point
+                    if (m_lStoredSeekPoint > l_SPacket.pos &&
+                            m_lStoredSeekPoint >= SOUNDSOURCEFFMPEG_POSDISTANCE) {
+                        av_free_packet(&l_SPacket);
+                        l_SPacket.data = NULL;
+                        l_SPacket.size = 0;
+                        continue;
+                    }
+                    m_lStoredSeekPoint = -1;
                 }
-                if (ret <= 0)
-                {
-                    tries++;
-                    //qDebug() << "ffmpeg: skip frame, decoded ret = 0";
-                    if (tries > 3) break;
+
+                l_iRet = avcodec_decode_audio4(m_pCodecCtx,l_pFrame,&l_iFrameFinished,
+                                               &l_SPacket);
+
+                if (l_iRet <= 0) {
+                    // An error or EOF occured,index break out and return what
+                    // we have so far.
+                    qDebug() << "EOF!";
+                    l_iStop = true;
                     continue;
-                }
-                dst += readsize;
-                bufferSize += readsize;
-                src += ret;
-                inputsize += ret;
-                //qDebug() << "ffmpeg: loop buffersize(" << bufferSize << "), readsize(" << readsize << ") ret(" << ret << ") psize(" << packet.size << ")";
-            } while (inputsize < packet.size);
-            //qDebug() << "ffmpeg: after avcodec_decode_audio outsize(" << bufferSize << ") - ret(" << ret << ")";
-            if (bufferSize != 0)
-                return true;
+                } else {
+                    l_iRet = 0;
+                    l_SObj = (struct ffmpegCacheObject *)malloc(sizeof(struct ffmpegCacheObject));
+                    if (l_SObj == NULL) {
+                        qDebug() << "SoundSourceFFmpeg::readFramesToCache: Not enough memory!";
+                        l_iStop = true;
+                        continue;
+                    }
+                    memset(l_SObj, 0x00, sizeof(struct ffmpegCacheObject));
+                    l_iRet = m_pResample->reSample(l_pFrame, &l_SObj->bytes);
 
+                    if (l_iRet > 0) {
+                        // Remove from cache
+                        if (m_SCache.size() >= (SOUNDSOURCEFFMPEG_CACHESIZE - 10)) {
+                            l_SRmObj = m_SCache[0];
+                            m_SCache.remove(0);
+                            free(l_SRmObj->bytes);
+                            free(l_SRmObj);
+                        }
+
+                        // Add to cache and store byte place to memory
+                        m_SCache.append(l_SObj);
+                        l_SObj->startByte = m_lCacheBytePos / 2;
+                        l_SObj->length = l_iRet / 2;
+                        m_lCacheBytePos += l_iRet;
+
+                        // Ogg/Opus have packages pos that have many
+                        // audio frames so seek next unique pos..
+                        if (l_SPacket.pos != l_lLastPacketPos) {
+                            m_bUnique = true;
+                            l_lLastPacketPos = l_SPacket.pos;
+                        }
+
+                        // If we are over last storepos and we have read more than jump point need is and pos is unique we store it to memory
+                        if (m_lCacheBytePos > m_lLastStoredPos &&
+                                m_lCacheBytePos > (SOUNDSOURCEFFMPEG_POSDISTANCE + m_lLastStoredPos) &&
+                                m_bUnique == true) {
+                            struct ffmpegLocationObject  *l_SJmp = (struct ffmpegLocationObject  *)malloc(
+                                    sizeof(struct ffmpegLocationObject));
+                            m_lLastStoredPos = m_lCacheBytePos;
+                            l_SJmp->startByte = m_lCacheBytePos / 2;
+                            l_SJmp->pos = l_SPacket.pos;
+                            l_SJmp->pts = l_SPacket.pts;
+                            m_SJumpPoints.append(l_SJmp);
+                            m_bUnique = false;
+                        }
+
+                        if (offset < 0 || (quint64) offset <= (m_lCacheBytePos / 2)) {
+                            l_iCount --;
+                        }
+                    } else {
+                        free(l_SObj);
+                        l_SObj = NULL;
+                        qDebug() <<
+                                 "SoundSourceFFmpeg::readFramesToCache: General error in audio decode:" <<
+                                 l_iRet;
+                    }
+                }
+
+                av_free_packet(&l_SPacket);
+                l_SPacket.data = NULL;
+                l_SPacket.size = 0;
+
+            } else {
+                l_iError ++;
+                if (l_iError == 5) {
+                    // Stream end and we couldn't read enough frames
+                    l_iStop = true;
+                }
+            }
+
+
+        } else {
+            qDebug() << "SoundSourceFFmpeg::readFramesToCache: Packet too big or File end";
+            l_iStop = true;
         }
-        //debug
-        av_free_packet(&packet);
+
     }
+
+    if (l_pFrame != NULL) {
+      l_iFrameCount --;
+// FFMPEG 2.2 3561060 anb beyond
+#if LIBAVCODEC_VERSION_INT >= 3561060
+          av_frame_unref(l_pFrame);
+          av_frame_free(&l_pFrame);
+// FFMPEG 0.11 and below
+#elif LIBAVCODEC_VERSION_INT <= 3544932
+          av_free(l_pFrame);
+// FFMPEG 1.0 - 2.1
+#else
+          avcodec_free_frame(&l_pFrame);
+#endif
+          l_pFrame = NULL;
+
+    }
+
+    if (l_iFrameCount > 0) {
+       qDebug() << "SoundSourceFFmpeg::readFramesToCache(): Frame balance is not 0 it is: " << l_iFrameCount;
+    }
+
+    l_SObj = m_SCache.first();
+    m_lCacheStartByte = l_SObj->startByte;
+    l_SObj = m_SCache.last();
+    m_lCacheEndByte = (l_SObj->startByte + l_SObj->length);
+
+    if (!l_iCount) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+bool SoundSourceFFmpeg::getBytesFromCache(char *buffer, quint64 offset,
+        quint64 size) {
+    struct ffmpegCacheObject *l_SObj = NULL;
+    quint32 l_lPos = 0;
+    quint32 l_lLeft = 0;
+    quint32 l_lOffset = 0;
+    quint32 l_lBytesToCopy = 0;
+
+    if (offset >= m_lCacheStartByte) {
+        if (m_lCacheLastPos == 0) {
+            m_lCacheLastPos = m_SCache.size() - 1;
+        }
+        for (l_lPos = m_lCacheLastPos; l_lPos > 0; l_lPos --) {
+            l_SObj = m_SCache[l_lPos];
+            if ((l_SObj->startByte + l_SObj->length) < offset) {
+                break;
+            }
+        }
+
+        l_SObj = m_SCache[l_lPos];
+
+        l_lLeft = (size * 2);
+        memset(buffer, 0x00, l_lLeft);
+        while (l_lLeft > 0) {
+
+            if (l_SObj == NULL || (l_lPos + 5) > (unsigned int)m_SCache.size()) {
+                offset = l_SObj->startByte;
+                if (readFramesToCache(50, -1) == false) {
+                    return false;
+                }
+                for (l_lPos = (m_SCache.size() - 50); l_lPos > 0; l_lPos --) {
+                    l_SObj = m_SCache[l_lPos];
+                    if ((l_SObj->startByte + l_SObj->length) < offset) {
+                        break;
+                    }
+                }
+                l_SObj = m_SCache[l_lPos];
+                continue;
+            }
+
+            if (l_SObj->startByte <= offset) {
+                l_lOffset = (offset - l_SObj->startByte) * 2;
+            }
+
+            if (l_lOffset >= (l_SObj->length * 2)) {
+                l_SObj = m_SCache[++ l_lPos];
+                continue;
+            }
+
+            if (l_lLeft > (l_SObj->length * 2)) {
+                l_lBytesToCopy = ((l_SObj->length * 2)  - l_lOffset);
+                memcpy(buffer, (l_SObj->bytes + l_lOffset), l_lBytesToCopy);
+                l_lOffset = 0;
+                buffer += l_lBytesToCopy;
+                l_lLeft -= l_lBytesToCopy;
+            } else {
+                memcpy(buffer, l_SObj->bytes, l_lLeft);
+                l_lLeft = 0;
+            }
+
+            l_SObj = m_SCache[++ l_lPos];
+        }
+
+        m_lCacheLastPos = --l_lPos;
+        return true;
+    }
+
     return false;
 }
 
-/*
-   read <size> samples into <destination>, and return the number of
-   samples actually read.
- */
-unsigned SoundSourceFFmpeg::read(unsigned long size, const SAMPLE * destination)
-{
+Result SoundSourceFFmpeg::open() {
+    unsigned int i;
+    AVDictionary *l_iFormatOpts = NULL;
 
-    qDebug() << "This code has a bug! It needs fixing before you use it.";
-    char * dest = (char *) destination;
-    char * src = NULL;
-    int index = 0;
-    int outsize = 0;
+    QByteArray qBAFilename = getFilename().toLocal8Bit();
 
-    // rryan 2/2009 This is wrong! read()'s semantics are that
-    // destination has only 'size' free items.
-    int needed = size*2; //*channels;
+    qDebug() << "New SoundSourceFFmpeg :" << qBAFilename;
 
-    lock();
-    qDebug() << "ffmpeg: read, requested:(" << needed / 2 << ")  dts:" << pFormatCtx->streams[audioStream]->cur_dts << "ld buffoffset:" << bufferOffset << " buffsize: " << bufferSize << "\n";
-    //copy previous buffer
-    src = (char *)buffer;
-    src += bufferOffset;
-    while (needed > 0) {
-        if (bufferOffset < bufferSize) {
-            index = bufferSize - bufferOffset > needed ? needed : bufferSize - bufferOffset;
-            //qDebug() << "ffmpeg: copy(" << index << ") needed(" << needed << ")";
-            memcpy((char *)dest, (char *)(src), index);
-            src += index;
-            dest += index; //(SAMPLE *)((char *)(dest) + index);
-            needed -= index;
-            bufferOffset += index;
-            outsize += index;
-        }
-        if (needed > 0 && (bufferSize - bufferOffset <= 0)) {
-            bufferOffset = 0;
-            readInput();
-            src = (char *)buffer;
-            src += bufferOffset;
-        }
-    }
-    // convert into stereo if file is mono
-    /*if (channels == 1) {
-       for(int i=index;i>0;i--) {
-       dest[i*2]     = dest[i];
-       dest[(i*2)+1] = dest[i];
-       }
-       }*/
-    // return the number of samples in buffer
-    unlock();
-    return (outsize/2);
-}
+    m_pFormatCtx = avformat_alloc_context();
 
-/*
-   Parse the the file to get metadata
- */
+#if LIBAVCODEC_VERSION_INT < 3622144
+    m_pFormatCtx->max_analyze_duration = 999999999;
+#endif
 
-int SoundSourceFFmpeg::ParseHeader( TrackInfoObject * Track )
-{
-    QString location = Track->getLocation();
-    AVFormatContext * FmtCtx;
-    AVCodecContext * CodecCtx;
-    int i, audioStream = -1;
-    QByteArray fname;
-
-    fname = location.toAscii();
-    FFmpegInit();
-    qDebug() << "ffmpeg: parsing file:" << fname;
-    if(av_open_input_file(&FmtCtx, fname.constData(), NULL, 0, NULL)!=0)
-    {
-        qDebug() << "av_open_input_file: cannot open" << fname;
+    // Open file and make m_pFormatCtx
+    if (avformat_open_input(&m_pFormatCtx, qBAFilename.constData(), NULL,
+                            &l_iFormatOpts)!=0) {
+        qDebug() << "av_open_input_file: cannot open" << qBAFilename;
         return ERR;
     }
+
+
+#if LIBAVCODEC_VERSION_INT > 3544932
+    av_dict_free(&l_iFormatOpts);
+#endif
+
+
     // Retrieve stream information
-    if(av_find_stream_info(FmtCtx)<0)
-    {
-        qDebug() << "av_find_stream_info: cannot open" << fname;
+    if (avformat_find_stream_info(m_pFormatCtx, NULL)<0) {
+        qDebug() << "av_find_stream_info: cannot open" << qBAFilename;
         return ERR;
     }
-    for(i=0; i<FmtCtx->nb_streams; i++)
-        if(FmtCtx->streams[i]->codec->codec_type==CODEC_TYPE_AUDIO)
-        {
-            audioStream=i;
+
+
+    //debug only (Enable if needed)
+    //av_dump_format(m_pFormatCtx, 0, qBAFilename.constData(), false);
+
+    // Find the first video stream
+    m_iAudioStream=-1;
+
+    for (i=0; i<m_pFormatCtx->nb_streams; i++)
+        if (m_pFormatCtx->streams[i]->codec->codec_type==AVMEDIA_TYPE_AUDIO) {
+            m_iAudioStream=i;
             break;
         }
-    if(audioStream==-1)
-    {
-        qDebug() << "cannot find an audio stream: cannot open" << location;
+    if (m_iAudioStream==-1) {
+        qDebug() << "ffmpeg: cannot find an audio stream: cannot open"
+                 << qBAFilename;
         return ERR;
     }
+
     // Get a pointer to the codec context for the video stream
-    CodecCtx=FmtCtx->streams[audioStream]->codec;
-    Track->setType(location.section(".",-1).toLower());
-    Track->setDuration(FmtCtx->duration / AV_TIME_BASE);
-    Track->setBitrate((int)(CodecCtx->bit_rate / 1000));
-    Track->setSampleRate(CodecCtx->sample_rate);
-    Track->setChannels(CodecCtx->channels);
-    av_close_input_file(FmtCtx);
+    m_pCodecCtx=m_pFormatCtx->streams[m_iAudioStream]->codec;
+
+    // Find the decoder for the audio stream
+    if (!(m_pCodec=avcodec_find_decoder(m_pCodecCtx->codec_id))) {
+        qDebug() << "ffmpeg: cannot find a decoder for" << qBAFilename;
+        return ERR;
+    }
+
+    if (avcodec_open2(m_pCodecCtx, m_pCodec, NULL)<0) {
+        qDebug() << "ffmpeg:  cannot open" << qBAFilename;
+        return ERR;
+    }
+
+    m_pResample = new EncoderFfmpegResample(m_pCodecCtx);
+    m_pResample->open(m_pCodecCtx->sample_fmt, AV_SAMPLE_FMT_S16);
+
+    this->setChannels(m_pCodecCtx->channels);
+    this->setSampleRate(m_pCodecCtx->sample_rate);
+
+    qDebug() << "ffmpeg: Samplerate: " << this->getSampleRate() << ", Channels: " <<
+             this->getChannels() << "\n";
+    if (this->getChannels() > 2) {
+        qDebug() << "ffmpeg: No support for more than 2 channels!";
+        return ERR;
+    }
+    m_filelength = (long int) ((double)m_pFormatCtx->duration * 2 / AV_TIME_BASE *
+                             this->getSampleRate());
+
     return OK;
 }
 
-/*
-   Return the length of the file in samples.
- */
-inline long unsigned SoundSourceFFmpeg::length()
-{
-    return filelength;
+long SoundSourceFFmpeg::seek(long filepos) {
+    int ret = 0;
+    qint64 i = 0;
+
+    if (filepos < 0 || (unsigned long) filepos < m_lCacheStartByte) {
+        ret = avformat_seek_file(m_pFormatCtx,
+                                 m_iAudioStream,
+                                 0,
+                                 32767 * 2,
+                                 32767 * 2,
+                                 AVSEEK_FLAG_BACKWARD);
+
+
+        if (ret < 0) {
+            qDebug() << "SoundSourceFFmpeg::seek: Can't seek to 0 byte!";
+            return -1;
+        }
+
+        clearCache();
+        m_SCache.clear();
+        m_lCacheStartByte = 0;
+        m_lCacheEndByte = 0;
+        m_lCacheLastPos = 0;
+        m_lCacheBytePos = 0;
+        m_lStoredSeekPoint = -1;
+
+
+        // Try to find some jump point near to
+        // where we are located so we don't needed
+        // to try guess it
+        if (filepos >= SOUNDSOURCEFFMPEG_POSDISTANCE) {
+            for (i = 0; i < m_SJumpPoints.size(); i ++) {
+                if (m_SJumpPoints[i]->startByte >= (unsigned long) filepos && i > 2) {
+                    m_lCacheBytePos = m_SJumpPoints[i - 2]->startByte * 2;
+                    m_lStoredSeekPoint = m_SJumpPoints[i - 2]->pos;
+                    break;
+                }
+            }
+        }
+
+        if (filepos == 0) {
+            readFramesToCache((SOUNDSOURCEFFMPEG_CACHESIZE - 50), -1);
+        } else {
+            readFramesToCache((SOUNDSOURCEFFMPEG_CACHESIZE / 2), filepos);
+        }
+    }
+
+
+    if (m_lCacheEndByte <= (unsigned long) filepos) {
+        readFramesToCache(100, filepos);
+    }
+
+    m_iCurrentMixxTs = filepos;
+
+    m_bIsSeeked = TRUE;
+
+    return filepos;
+}
+
+unsigned int SoundSourceFFmpeg::read(unsigned long size,
+                                     const SAMPLE * destination) {
+
+    if (m_SCache.size() == 0) {
+        // Make sure we allways start at begining and cache have some
+        // material that we can consume.
+        seek(0);
+        m_bIsSeeked = FALSE;
+    }
+
+    getBytesFromCache((char *)destination, m_iCurrentMixxTs, size);
+
+
+    //  As this is also Hack
+    // If we don't seek like we don't on analyzer.. keep
+    // place in mind..
+    if (m_bIsSeeked == FALSE) {
+        m_iCurrentMixxTs += size;
+    }
+
+    m_bIsSeeked = FALSE;
+    return size;
+
+}
+
+Result SoundSourceFFmpeg::parseHeader() {
+    qDebug() << "ffmpeg: SoundSourceFFmpeg::parseHeader" << getFilename();
+    QByteArray qBAFilename = getFilename().toLocal8Bit();
+
+    AVFormatContext *FmtCtx = avformat_alloc_context();
+    AVCodecContext *CodecCtx;
+    AVDictionaryEntry *FmtTag = NULL;
+    unsigned int i;
+    AVDictionary *l_iFormatOpts = NULL;
+
+    if (avformat_open_input(&FmtCtx, qBAFilename.constData(), NULL,
+                            &l_iFormatOpts) !=0) {
+        qDebug() << "av_open_input_file: cannot open" << qBAFilename.constData();
+        return ERR;
+    }
+
+#ifndef CODEC_ID_MP3
+    if (LIBAVFORMAT_VERSION_INT > 3540580 && l_iFormatOpts != NULL) {
+        av_dict_free(&l_iFormatOpts);
+    }
+#endif
+
+#if LIBAVCODEC_VERSION_INT < 3622144
+    FmtCtx->max_analyze_duration = 999999999;
+#endif
+
+    // Retrieve stream information
+    if (avformat_find_stream_info(FmtCtx, NULL)<0) {
+        qDebug() << "av_find_stream_info: Can't find metadata" <<
+                 qBAFilename.constData();
+        return ERR;
+    }
+
+    for (i=0; i<FmtCtx->nb_streams; i++)
+        if (FmtCtx->streams[i]->codec->codec_type==AVMEDIA_TYPE_AUDIO) {
+            m_iAudioStream=i;
+            break;
+        }
+    if (m_iAudioStream==-1) {
+        qDebug() << "cannot find an audio stream: Can't find stream" <<
+                 qBAFilename.constData();
+        return ERR;
+    }
+
+    // Get a pointer to the codec context for the video stream
+    CodecCtx=FmtCtx->streams[m_iAudioStream]->codec;
+
+    while ((FmtTag = av_dict_get(FmtCtx->metadata, "", FmtTag,
+                                 AV_DICT_IGNORE_SUFFIX))) {
+        QString strValue (QString::fromUtf8 (FmtTag->value));
+
+        // TODO: More sophisticated metadata reading
+        if (!strncmp(FmtTag->key, "artist", 7)) {
+            this->setArtist(strValue);
+        } else if (!strncmp(FmtTag->key, "title", 5)) {
+            this->setTitle(strValue);
+        } else if (!strncmp(FmtTag->key, "album_artist", 12)) {
+            this->setAlbumArtist(strValue);
+        } else if (!strncmp(FmtTag->key, "albumartist", 11)) {
+            this->setAlbumArtist(strValue);
+        } else if (!strncmp(FmtTag->key, "album", 5)) {
+            this->setAlbum(strValue);
+        } else if (!strncmp(FmtTag->key, "TOAL", 4)) {
+            this->setAlbum(strValue);
+        } else if (!strncmp(FmtTag->key, "date", 4)) {
+            this->setYear(strValue);
+        } else if (!strncmp(FmtTag->key, "genre", 5)) {
+            this->setGenre(strValue);
+        } else if (!strncmp(FmtTag->key, "comment", 7)) {
+            this->setComment(strValue);
+        }
+
+
+    }
+
+    while ((FmtTag = av_dict_get(FmtCtx->streams[m_iAudioStream]->metadata, "",
+                                 FmtTag, AV_DICT_IGNORE_SUFFIX))) {
+        // Convert the value from UTF-8.
+        QString strValue (QString::fromUtf8 (FmtTag->value));
+
+        if (!strncmp(FmtTag->key, "ARTIST", 7)) {
+            this->setArtist(strValue);
+        } else if (!strncmp(FmtTag->key, "ALBUM", 5)) {
+            this->setAlbum(strValue);
+        } else if (!strncmp(FmtTag->key, "YEAR", 4)) {
+            this->setYear(strValue);
+        } else if (!strncmp(FmtTag->key, "GENRE", 5)) {
+            this->setGenre(strValue);
+        } else if (!strncmp(FmtTag->key, "TITLE", 5)) {
+            this->setTitle(strValue);
+        } else if (!strncmp(FmtTag->key, "REPLAYGAIN_TRACK_PEAK", 20)) {
+        } else if (!strncmp(FmtTag->key, "REPLAYGAIN_TRACK_GAIN", 20)) {
+            this->setReplayGainString (strValue);
+        } else if (!strncmp(FmtTag->key, "REPLAYGAIN_ALBUM_PEAK", 20)) {
+        } else if (!strncmp(FmtTag->key, "REPLAYGAIN_ALBUM_GAIN", 20)) {
+        }
+
+
+    }
+
+    this->setType(getFilename().section(".",-1).toLower());
+    this->setDuration(FmtCtx->duration / AV_TIME_BASE);
+    this->setBitrate((int)(CodecCtx->bit_rate / 1000));
+    this->setSampleRate(CodecCtx->sample_rate);
+    this->setChannels(CodecCtx->channels);
+
+    avcodec_close(CodecCtx);
+    avformat_close_input(&FmtCtx);
+    av_free(FmtCtx);
+
+    return OK;
+}
+
+QImage SoundSourceFFmpeg::parseCoverArt() {
+    return QImage();
+}
+
+inline long unsigned SoundSourceFFmpeg::length() {
+    return m_filelength;
+}
+
+QList<QString> SoundSourceFFmpeg::supportedFileExtensions() {
+    QList<QString> list;
+    AVInputFormat *l_SInputFmt  = NULL;
+
+    while ((l_SInputFmt = av_iformat_next(l_SInputFmt))) {
+        if (l_SInputFmt->name == NULL) {
+            break;
+        }
+
+        if (!strcmp(l_SInputFmt->name, "flac")) {
+            list.append("flac");
+        } else if (!strcmp(l_SInputFmt->name, "ogg")) {
+            list.append("ogg");
+        } else if (!strcmp(l_SInputFmt->name, "mov,mp4,m4a,3gp,3g2,mj2")) {
+            list.append("m4a");
+        } else if (!strcmp(l_SInputFmt->name, "mp4")) {
+            list.append("mp4");
+        } else if (!strcmp(l_SInputFmt->name, "mp3")) {
+            list.append("mp3");
+        } else if (!strcmp(l_SInputFmt->name, "aac")) {
+            list.append("aac");
+        } else if (!strcmp(l_SInputFmt->name, "opus") ||
+                   !strcmp(l_SInputFmt->name, "libopus")) {
+            list.append("opus");
+        } else if (!strcmp(l_SInputFmt->name, "wma")) {
+            list.append("wma");
+        }
+    }
+
+    return list;
 }

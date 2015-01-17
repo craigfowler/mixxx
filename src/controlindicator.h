@@ -11,8 +11,8 @@ class ControlIndicator : public ControlObject {
     enum BlinkValue {
         OFF = 0,
         ON = 1,
-        RATIO1TO1_500MS = 2, // used for CDJ play/pause
-        RATIO1TO1_250MS = 3, // used for CDJ cue
+        RATIO1TO1_500MS = 2, // used for Pioneer play/pause
+        RATIO1TO1_250MS = 3, // used for Pioneer cue
     };
 
     ControlIndicator(ConfigKey key);
@@ -20,17 +20,23 @@ class ControlIndicator : public ControlObject {
 
     void setBlinkValue(enum BlinkValue bv);
 
+  signals:
+    void blinkValueChanged();
+
   private slots:
-    void slotGuiTick50ms(double streamTime);
+    void slotGuiTick50ms(double cpuTime);
+    void slotBlinkValueChanged();
 
   private:
     void toggle();
     // set() is private, use setBlinkValue instead
+    // it must be called from the GUI thread only to a void
+    // race condition by toggle()
     void set(double value) { ControlObject::set(value); };
 
     enum BlinkValue m_blinkValue;
     double m_nextSwitchTime;
-    ControlObjectThread* m_pCOTStreamTime;
+    ControlObjectThread* m_pCOTGuiTickTime;
     ControlObjectThread* m_pCOTGuiTick50ms;
 };
 

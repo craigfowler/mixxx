@@ -4,10 +4,12 @@
 #include <QHeaderView>
 #include <QPalette>
 #include <QScrollBar>
+#include <QFontMetrics>
 
 #include "widget/wwidget.h"
 #include "widget/wskincolor.h"
 #include "widget/wlibrarytableview.h"
+#include "util/math.h"
 
 WLibraryTableView::WLibraryTableView(QWidget* parent,
                                      ConfigObject<ConfigValue>* pConfig,
@@ -37,11 +39,13 @@ WLibraryTableView::WLibraryTableView(QWidget* parent,
     setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
 
     verticalHeader()->hide();
-    verticalHeader()->setDefaultSectionSize(20);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     setAlternatingRowColors(true);
 
     loadVScrollBarPosState();
+
+    connect(verticalScrollBar(), SIGNAL(valueChanged(int)),
+            this, SIGNAL(scrollValueChanged(int)));
 
     setTabKeyNavigation(false);
 }
@@ -106,3 +110,14 @@ void WLibraryTableView::moveSelection(int delta) {
     }
 }
 
+void WLibraryTableView::setTrackTableFont(const QFont& font) {
+    setFont(font);
+    setTrackTableRowHeight(verticalHeader()->defaultSectionSize());
+}
+
+void WLibraryTableView::setTrackTableRowHeight(int rowHeight) {
+    QFontMetrics metrics(font());
+    int fontHeightPx = metrics.height();
+    verticalHeader()->setDefaultSectionSize(math_max(
+            rowHeight, fontHeightPx));
+}

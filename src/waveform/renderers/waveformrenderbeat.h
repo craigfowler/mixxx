@@ -5,8 +5,9 @@
 
 #include "waveform/renderers/waveformrendererabstract.h"
 #include "util.h"
+#include "skin/skincontext.h"
 
-class ControlObjectThreadMain;
+class ControlObjectThread;
 
 class WaveformRenderBeat : public WaveformRendererAbstract {
   public:
@@ -14,12 +15,13 @@ class WaveformRenderBeat : public WaveformRendererAbstract {
     virtual ~WaveformRenderBeat();
 
     virtual bool init();
-    virtual void setup(const QDomNode& node);
+    virtual void setup(const QDomNode& node, const SkinContext& context);
     virtual void draw(QPainter* painter, QPaintEvent* event);
 
   private:
     QColor m_beatColor;
-    ControlObjectThreadMain* m_beatActive;
+    ControlObjectThread* m_pBeatActive;
+    QVector<QLineF> m_beats;
 
     DISALLOW_COPY_AND_ASSIGN(WaveformRenderBeat);
 };

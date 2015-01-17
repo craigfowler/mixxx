@@ -18,44 +18,99 @@
 #ifndef SOUNDSOURCEFFMPEG_H
 #define SOUNDSOURCEFFMPEG_H
 
-#include <qstring.h>
+#include <encoder/encoderffmpegresample.h>
+
+#include <QString>
+#include <QByteArray>
+#include <QList>
+#include <QVector>
+
 #include "soundsource.h"
-#include <ffmpeg/avcodec.h>
-#include <ffmpeg/avformat.h>
+extern "C" {
+// Needed to ensure that macros in <stdint.h> get defined.
+#ifndef __STDC_CONSTANT_MACROS
+#if __cplusplus < 201103L
+#define __STDC_CONSTANT_MACROS
+#endif
+#endif
+
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+
+#ifndef __FFMPEGOLDAPI__
+#include <libavutil/avutil.h>
+#include <libavutil/opt.h>
+#endif
+
+// Compability
+#include <libavutil/mathematics.h>
+#include <libavutil/opt.h>
+
+}
+#define SOUNDSOURCEFFMPEGDEBUG
 
 class TrackInfoObject;
 
+struct ffmpegLocationObject {
+    quint64 pos;
+    qint64 pts;
+    quint64 startByte;
+};
 
-class SoundSourceFFmpeg : public SoundSource {
+struct ffmpegCacheObject {
+    quint64 startByte;
+    quint32 length;
+    quint8 *bytes;
+};
+
+class SoundSourceFFmpeg : public Mixxx::SoundSource {
 public:
-    SoundSourceFFmpeg(QString qFilename);
+    explicit SoundSourceFFmpeg(QString qFilename);
     ~SoundSourceFFmpeg();
+    Result open();
     long seek(long);
-    unsigned read(unsigned long size, const SAMPLE*);
+    unsigned int read(unsigned long size, const SAMPLE*);
+    Result parseHeader();
+    QImage parseCoverArt();
     inline long unsigned length();
-    static int ParseHeader(TrackInfoObject * );
     bool readInput();
+    static QList<QString> supportedFileExtensions();
+    AVCodecContext *getCodecContext();
+    AVFormatContext *getFormatContext();
+    int getAudioStreamIndex();
+
 
 protected:
-  long ffmpeg2mixxx(long pos, const AVRational &time_base);
-  long mixxx2ffmpeg(long pos, const AVRational &time_base);
-  void lock();
-  void unlock();
+    void lock();
+    void unlock();
+
+    bool readFramesToCache(unsigned int count, qint64 offset);
+    bool getBytesFromCache(char *buffer, quint64 offset, quint64 size);
+    quint64 getSizeofCache();
+    bool clearCache();
 
 private:
-    int channels;
-    unsigned long filelength;
-    AVFormatContext *pFormatCtx;
-    AVInputFormat *iformat;
-    int audioStream;
-    AVCodecContext *pCodecCtx;
-    AVCodec *pCodec;
-    AVFrame *pFrame;
-    AVPacket packet;
+    int m_iAudioStream;
+    quint64 m_filelength;
+    AVFormatContext *m_pFormatCtx;
+    AVInputFormat *m_pIformat;
+    AVCodecContext *m_pCodecCtx;
+    AVCodec *m_pCodec;
 
-    volatile int bufferOffset;
-    volatile int bufferSize;
-    SAMPLE buffer[AVCODEC_MAX_AUDIO_FRAME_SIZE];
+    EncoderFfmpegResample *m_pResample;
+
+    qint64 m_iCurrentMixxTs;
+
+    bool m_bIsSeeked;
+
+    quint64 m_lCacheBytePos;
+    quint64 m_lCacheStartByte;
+    quint64 m_lCacheEndByte;
+    quint32 m_lCacheLastPos;
+    QVector<struct ffmpegCacheObject  *> m_SCache;
+    QVector<struct ffmpegLocationObject  *> m_SJumpPoints;
+    quint64 m_lLastStoredPos;
+    qint64 m_lStoredSeekPoint;
 };
 
 #endif

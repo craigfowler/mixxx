@@ -1,18 +1,22 @@
-#include <QtCore>
-#include <QtGui>
-
 #include "library/songdownloader.h"
+
+#include <QApplication>
+#include <QFileInfo>
+#include <QString>
+#include <QtDebug>
 
 #include "util/version.h"
 
 #define TEMP_EXTENSION ".tmp"
 
-SongDownloader::SongDownloader(QObject* parent) : QObject(parent) {
+SongDownloader::SongDownloader(QObject* parent)
+    : QObject(parent),
+      m_pDownloadedFile(NULL),
+      m_pReply(NULL),
+      m_pRequest(NULL) {
     qDebug() << "SongDownloader constructed";
 
     m_pNetwork = new QNetworkAccessManager();
-    m_pDownloadedFile = NULL;
-    m_pRequest = NULL;
     //connect(m_pNetwork, SIGNAL(finished(QNetworkReply*)),
     //     this, SLOT(finishedSlot(QNetworkReply*)));
 }
@@ -34,7 +38,6 @@ bool SongDownloader::downloadSongFromURL(QUrl& url) {
 
     return true;
 }
-
 
 bool SongDownloader::downloadFromQueue() {
     QUrl downloadUrl = m_downloadQueue.dequeue();
@@ -95,7 +98,7 @@ void SongDownloader::slotError(QNetworkReply::NetworkError error) {
     emit(downloadError());
 }
 
-void SongDownloader::slotProgress( qint64 bytesReceived, qint64 bytesTotal ) {
+void SongDownloader::slotProgress(qint64 bytesReceived, qint64 bytesTotal) {
     qDebug() << bytesReceived << "/" << bytesTotal;
     emit(downloadProgress(bytesReceived, bytesTotal));
 }
@@ -124,13 +127,3 @@ void SongDownloader::slotDownloadFinished() {
     //Emit this signal when all the files have been downloaded.
     emit(downloadFinished());
 }
-
-/*
-void SongDownloader::finishedSlot(QNetworkReply* reply) {
-    if (reply->error() == QNetworkReply::NoError)
-    {
-        qDebug() << "SongDownloader: finishedSlot, no error";
-    }
-    else
-        qDebug() << "SongDownloader: NAM error :-/";
-}*/

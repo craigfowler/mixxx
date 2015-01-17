@@ -15,6 +15,7 @@
 
 #include "trackinfoobject.h"
 #include "treeitemmodel.h"
+#include "library/coverartcache.h"
 
 class TrackModel;
 class WLibrarySidebar;
@@ -31,13 +32,13 @@ class LibraryFeature : public QObject {
     virtual QVariant title() = 0;
     virtual QIcon getIcon() = 0;
 
-    virtual bool dropAccept(QList<QUrl> urls, QWidget *pSource) {
+    virtual bool dropAccept(QList<QUrl> urls, QObject* pSource) {
         Q_UNUSED(urls);
         Q_UNUSED(pSource);
         return false;
     }
     virtual bool dropAcceptChild(const QModelIndex& index,
-                                 QList<QUrl> urls, QWidget *pSource) {
+                                 QList<QUrl> urls, QObject* pSource) {
         Q_UNUSED(index);
         Q_UNUSED(urls);
         Q_UNUSED(pSource);
@@ -86,12 +87,15 @@ class LibraryFeature : public QObject {
     void loadTrackToPlayer(TrackPointer pTrack, QString group, bool play = false);
     void restoreSearch(const QString&);
     // emit this signal before you parse a large music collection, e.g., iTunes, Traktor.
-    void featureIsLoading(LibraryFeature*);
-    // emit this signal if the foreign music collection has been imported/parsed. 
+    // The second arg indicates if the feature should be "selected" when loading starts
+    void featureIsLoading(LibraryFeature*, bool selectFeature);
+    // emit this signal if the foreign music collection has been imported/parsed.
     void featureLoadingFinished(LibraryFeature*s);
-    // emit this signal to select pFeature 
+    // emit this signal to select pFeature
     void featureSelect(LibraryFeature* pFeature, const QModelIndex& index);
-
+    // emit this signal to enable/disable the cover art widget
+    void enableCoverArtDisplay(bool);
+    void trackSelected(TrackPointer pTrack);
 };
 
 #endif /* LIBRARYFEATURE_H */

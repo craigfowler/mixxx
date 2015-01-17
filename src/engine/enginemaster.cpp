@@ -15,40 +15,64 @@
 *                                                                         *
 ***************************************************************************/
 
-#include <QDebug>
+#include <QtDebug>
 #include <QList>
 #include <QPair>
 
 #include "controlpushbutton.h"
 #include "configobject.h"
-#include "controllogpotmeter.h"
+#include "controlaudiotaperpot.h"
 #include "controlpotmeter.h"
-#include "enginebuffer.h"
-#include "enginemaster.h"
+#include "controlaudiotaperpot.h"
+#include "engine/enginebuffer.h"
+#include "engine/enginemaster.h"
 #include "engine/engineworkerscheduler.h"
-#include "enginebuffer.h"
-#include "enginechannel.h"
-#include "engineclipping.h"
-#include "enginevumeter.h"
-#include "enginexfader.h"
+#include "engine/enginedeck.h"
+#include "engine/enginebuffer.h"
+#include "engine/enginechannel.h"
+#include "engine/enginetalkoverducking.h"
+#include "engine/enginevumeter.h"
+#include "engine/enginexfader.h"
+#include "engine/enginedelay.h"
 #include "engine/sidechain/enginesidechain.h"
+#include "engine/sync/enginesync.h"
 #include "sampleutil.h"
+#include "engine/effects/engineeffectsmanager.h"
+#include "effects/effectsmanager.h"
 #include "util/timer.h"
+#include "util/trace.h"
+#include "util/defs.h"
 #include "playermanager.h"
 #include "engine/channelmixer.h"
-#include "engine/guitick.h"
 
-#ifdef __LADSPA__
-#include "engineladspa.h"
-#endif
-
-EngineMaster::EngineMaster(ConfigObject<ConfigValue> * _config,
-                           const char * group,
-                           bool bEnableSidechain)
-        : m_headphoneMasterGainOld(0),
-          m_headphoneVolumeOld(0) {
+EngineMaster::EngineMaster(ConfigObject<ConfigValue>* _config,
+                           const char* group,
+                           EffectsManager* pEffectsManager,
+                           bool bEnableSidechain,
+                           bool bRampingGain)
+        : m_pEngineEffectsManager(pEffectsManager ? pEffectsManager->getEngineEffectsManager() : NULL),
+          m_bRampingGain(bRampingGain),
+          m_masterVolumeOld(0.0),
+          m_headphoneMasterGainOld(0.0),
+          m_headphoneVolumeOld(1.0),
+          m_masterGroup("[Master]"),
+          m_headphoneGroup("[Headphone]"),
+          m_busLeftGroup("[BusLeft]"),
+          m_busCenterGroup("[BusCenter]"),
+          m_busRightGroup("[BusRight]") {
+    m_bBusOutputConnected[0] = false;
+    m_bBusOutputConnected[1] = false;
+    m_bBusOutputConnected[2] = false;
     m_pWorkerScheduler = new EngineWorkerScheduler(this);
-    m_pWorkerScheduler->start();
+    m_pWorkerScheduler->start(QThread::HighPriority);
+
+    if (pEffectsManager) {
+        pEffectsManager->registerGroup(getMasterGroup());
+        pEffectsManager->registerGroup(getHeadphoneGroup());
+        pEffectsManager->registerGroup(getBusLeftGroup());
+        pEffectsManager->registerGroup(getBusCenterGroup());
+        pEffectsManager->registerGroup(getBusRightGroup());
+    }
 
     // Master sample rate
     m_pMasterSampleRate = new ControlObject(ConfigKey(group, "samplerate"), true, true);
@@ -57,102 +81,140 @@ EngineMaster::EngineMaster(ConfigObject<ConfigValue> * _config,
     // Latency control
     m_pMasterLatency = new ControlObject(ConfigKey(group, "latency"), true, true);
     m_pMasterAudioBufferSize = new ControlObject(ConfigKey(group, "audio_buffer_size"));
-    m_pMasterUnderflowCount = new ControlObject(ConfigKey(group, "underflow_count"), true, true);
+    m_pAudioLatencyOverloadCount = new ControlObject(ConfigKey(group, "audio_latency_overload_count"), true, true);
+    m_pAudioLatencyUsage = new ControlPotmeter(ConfigKey(group, "audio_latency_usage"), 0.0, 0.25);
+    m_pAudioLatencyOverload  = new ControlPotmeter(ConfigKey(group, "audio_latency_overload"), 0.0, 1.0);
 
     // Master rate
     m_pMasterRate = new ControlPotmeter(ConfigKey(group, "rate"), -1.0, 1.0);
 
-#ifdef __LADSPA__
-    // LADSPA
-    m_pLadspa = new EngineLADSPA();
-#endif
+    // Master sync controller
+    m_pMasterSync = new EngineSync(_config);
+
+    // The last-used bpm value is saved in the destructor of EngineSync.
+    double default_bpm = _config->getValueString(ConfigKey("[InternalClock]", "bpm"),
+                                                 "124.0").toDouble();
+    ControlObject::getControl(ConfigKey("[InternalClock]","bpm"))->set(default_bpm);
 
     // Crossfader
-    m_pCrossfader = new ControlPotmeter(ConfigKey(group, "crossfader"),-1.,1.);
+    m_pCrossfader = new ControlPotmeter(ConfigKey(group, "crossfader"), -1., 1.);
 
     // Balance
     m_pBalance = new ControlPotmeter(ConfigKey(group, "balance"), -1., 1.);
 
-    // Master volume
-    m_pMasterVolume = new ControlLogpotmeter(ConfigKey(group, "volume"), 5.);
+    // Master gain
+    m_pMasterGain = new ControlAudioTaperPot(ConfigKey(group, "gain"), -14, 14, 0.5);
 
-    // Clipping
-    m_pClipping = new EngineClipping(group);
+    // Legacy: the master "gain" control used to be named "volume" in Mixxx
+    // 1.11.0 and earlier. See Bug #1306253.
+    ControlDoublePrivate::insertAlias(ConfigKey(group, "volume"),
+                                      ConfigKey(group, "gain"));
 
     // VU meter:
     m_pVumeter = new EngineVuMeter(group);
 
+    m_pMasterDelay = new EngineDelay(group, ConfigKey(group, "delay"));
+    m_pHeadDelay = new EngineDelay(group, ConfigKey(group, "headDelay"));
+
     // Headphone volume
-    m_pHeadVolume = new ControlLogpotmeter(ConfigKey(group, "headVolume"), 5.);
+    m_pHeadGain = new ControlAudioTaperPot(ConfigKey(group, "headGain"), -14, 14, 0.5);
+
+    // Legacy: the headphone "headGain" control used to be named "headVolume" in
+    // Mixxx 1.11.0 and earlier. See Bug #1306253.
+    ControlDoublePrivate::insertAlias(ConfigKey(group, "headVolume"),
+                                      ConfigKey(group, "headGain"));
 
     // Headphone mix (left/right)
     m_pHeadMix = new ControlPotmeter(ConfigKey(group, "headMix"),-1.,1.);
     m_pHeadMix->setDefaultValue(-1.);
     m_pHeadMix->set(-1.);
 
-    // Headphone Clipping
-    m_pHeadClipping = new EngineClipping("");
+    // Master / Headphone split-out mode (for devices with only one output).
+    m_pHeadSplitEnabled = new ControlPushButton(ConfigKey(group, "headSplit"));
+    m_pHeadSplitEnabled->setButtonMode(ControlPushButton::TOGGLE);
+    m_pHeadSplitEnabled->set(0.0);
+
+    m_pTalkoverDucking = new EngineTalkoverDucking(_config, group);
 
     // Allocate buffers
     m_pHead = SampleUtil::alloc(MAX_BUFFER_LEN);
     m_pMaster = SampleUtil::alloc(MAX_BUFFER_LEN);
-    SampleUtil::applyGain(m_pHead, 0, MAX_BUFFER_LEN);
-    SampleUtil::applyGain(m_pMaster, 0, MAX_BUFFER_LEN);
+    SampleUtil::clear(m_pHead, MAX_BUFFER_LEN);
+    SampleUtil::clear(m_pMaster, MAX_BUFFER_LEN);
 
     // Setup the output buses
     for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; ++o) {
-        struct OutputBus* bus = &m_outputBus[o];
-        bus->m_pBuffer = SampleUtil::alloc(MAX_BUFFER_LEN);
-        SampleUtil::applyGain(bus->m_pBuffer, 0, MAX_BUFFER_LEN);
-        bus->m_gain.setGains(1.0,
-                             o == EngineChannel::LEFT ? 1.0 : 0.0,
-                             o == EngineChannel::CENTER ? 1.0 : 0.0,
-                             o == EngineChannel::RIGHT ? 1.0 : 0.0);
+        m_pOutputBusBuffers[o] = SampleUtil::alloc(MAX_BUFFER_LEN);
+        SampleUtil::clear(m_pOutputBusBuffers[o], MAX_BUFFER_LEN);
     }
 
     // Starts a thread for recording and shoutcast
     m_pSideChain = bEnableSidechain ? new EngineSideChain(_config) : NULL;
 
     // X-Fader Setup
-    m_pXFaderMode = new ControlPotmeter(
-        ConfigKey("[Mixer Profile]", "xFaderMode"), 0., 1.);
+    m_pXFaderMode = new ControlPushButton(
+            ConfigKey("[Mixer Profile]", "xFaderMode"));
+    m_pXFaderMode->setButtonMode(ControlPushButton::TOGGLE);
     m_pXFaderCurve = new ControlPotmeter(
-        ConfigKey("[Mixer Profile]", "xFaderCurve"), 0., 2.);
+            ConfigKey("[Mixer Profile]", "xFaderCurve"), 0., 2.);
     m_pXFaderCalibration = new ControlPotmeter(
-        ConfigKey("[Mixer Profile]", "xFaderCalibration"), -2., 2.);
-    m_pXFaderReverse = new ControlPotmeter(
-        ConfigKey("[Mixer Profile]", "xFaderReverse"), 0., 1.);
+            ConfigKey("[Mixer Profile]", "xFaderCalibration"), -2., 2.);
+    m_pXFaderReverse = new ControlPushButton(
+            ConfigKey("[Mixer Profile]", "xFaderReverse"));
+    m_pXFaderReverse->setButtonMode(ControlPushButton::TOGGLE);
 
-    m_pGuiTick = new GuiTick(this);
+    m_pKeylockEngine = new ControlObject(ConfigKey(group, "keylock_engine"),
+                                         true, false, true);
+    m_pKeylockEngine->set(_config->getValueString(
+            ConfigKey(group, "keylock_engine")).toDouble());
+
+    m_pMasterEnabled = new ControlObject(ConfigKey(group, "enabled"),
+            true, false, true);  // persist = true
+    m_pMasterMonoMixdown = new ControlObject(ConfigKey(group, "mono_mixdown"),
+            true, false, true);  // persist = true
+    m_pHeadphoneEnabled = new ControlObject(ConfigKey(group, "headEnabled"));
+
+
+    // Note: the EQ Rack is set in EffectsManager::setupDefaults();
 }
 
 EngineMaster::~EngineMaster() {
     qDebug() << "in ~EngineMaster()";
+    delete m_pKeylockEngine;
     delete m_pCrossfader;
     delete m_pBalance;
     delete m_pHeadMix;
-    delete m_pMasterVolume;
-    delete m_pHeadVolume;
-    delete m_pClipping;
+    delete m_pHeadSplitEnabled;
+    delete m_pMasterGain;
+    delete m_pHeadGain;
+    delete m_pTalkoverDucking;
     delete m_pVumeter;
-    delete m_pHeadClipping;
     delete m_pSideChain;
+    delete m_pMasterDelay;
+    delete m_pHeadDelay;
 
     delete m_pXFaderReverse;
     delete m_pXFaderCalibration;
     delete m_pXFaderCurve;
     delete m_pXFaderMode;
 
+    delete m_pMasterSync;
     delete m_pMasterSampleRate;
     delete m_pMasterLatency;
     delete m_pMasterAudioBufferSize;
     delete m_pMasterRate;
-    delete m_pMasterUnderflowCount;
+    delete m_pAudioLatencyOverloadCount;
+    delete m_pAudioLatencyUsage;
+    delete m_pAudioLatencyOverload;
+
+    delete m_pMasterEnabled;
+    delete m_pMasterMonoMixdown;
+    delete m_pHeadphoneEnabled;
 
     SampleUtil::free(m_pHead);
     SampleUtil::free(m_pMaster);
     for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; o++) {
-        SampleUtil::free(m_outputBus[o].m_pBuffer);
+        SampleUtil::free(m_pOutputBusBuffers[o]);
     }
 
     delete m_pWorkerScheduler;
@@ -164,6 +226,7 @@ EngineMaster::~EngineMaster() {
         SampleUtil::free(pChannelInfo->m_pBuffer);
         delete pChannelInfo->m_pChannel;
         delete pChannelInfo->m_pVolumeControl;
+        delete pChannelInfo->m_pMuteControl;
         delete pChannelInfo;
     }
 }
@@ -176,40 +239,24 @@ const CSAMPLE* EngineMaster::getHeadphoneBuffer() const {
     return m_pHead;
 }
 
-void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBufferSize) {
-    static bool haveSetName = false;
-    if (!haveSetName) {
-        QThread::currentThread()->setObjectName("Engine");
-        haveSetName = true;
-    }
-    ScopedTimer t("EngineMaster::process");
+void EngineMaster::processChannels(unsigned int* busChannelConnectionFlags,
+                                   unsigned int* headphoneOutput,
+                                   int iBufferSize) {
+    ScopedTimer timer("EngineMaster::processChannels");
 
-    CSAMPLE **pOutput = (CSAMPLE**)pOut;
-    Q_UNUSED(pOutput);
+    // Clear talkover compressor for the next round of gain calculation.
+    m_pTalkoverDucking->clearKeys();
 
-    // Prepare each channel for output
-
-    // Bitvector of enabled channels
-    const unsigned int maxChannels = 32;
-    unsigned int busChannelConnectionFlags[3] = { 0, 0, 0 };
-    unsigned int headphoneOutput = 0;
-
-    // Compute headphone mix
-    // Head phone left/right mix
-    CSAMPLE cf_val = m_pHeadMix->get();
-    CSAMPLE chead_gain = 0.5*(-cf_val+1.);
-    CSAMPLE cmaster_gain = 0.5*(cf_val+1.);
-    // qDebug() << "head val " << cf_val << ", head " << chead_gain
-    //          << ", master " << cmaster_gain;
-
-    Timer timer("EngineMaster::process channels");
-    QList<ChannelInfo*>::iterator it = m_channels.begin();
-    for (unsigned int channel_number = 0;
-         it != m_channels.end(); ++it, ++channel_number) {
+    EngineChannel* pMasterChannel = m_pMasterSync->getMaster();
+    m_activeChannels.clear();
+    QList<ChannelInfo*>::const_iterator it = m_channels.constBegin();
+    QList<ChannelInfo*>::const_iterator end = m_channels.constEnd();
+    for (unsigned int channel_number = 0; it != end; ++it, ++channel_number) {
         ChannelInfo* pChannelInfo = *it;
         EngineChannel* pChannel = pChannelInfo->m_pChannel;
 
-        if (!pChannel->isActive()) {
+        // Skip inactive channels.
+        if (!pChannel || !pChannel->isActive()) {
             continue;
         }
 
@@ -222,30 +269,94 @@ void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBuff
         // If the channel is enabled for previewing in headphones, copy it
         // over to the headphone buffer
         if (pChannel->isPFL()) {
-            headphoneOutput |= (1 << channel_number);
+            *headphoneOutput |= (1 << channel_number);
             needsProcessing = true;
         }
 
-        // Process the buffer if necessary
+        // If necessary, add the channel to the list of buffers to process.
         if (needsProcessing) {
-            pChannel->process(NULL, pChannelInfo->m_pBuffer, iBufferSize);
+            if (pChannel == pMasterChannel) {
+                // If this is the sync master, it should be processed first.
+                m_activeChannels.prepend(pChannelInfo);
+            } else {
+                m_activeChannels.append(pChannelInfo);
+            }
         }
     }
-    timer.elapsed(true);
+
+    // Now that the list is built and ordered, do the processing.
+    foreach (ChannelInfo* pChannelInfo, m_activeChannels) {
+        EngineChannel* pChannel = pChannelInfo->m_pChannel;
+        pChannel->process(pChannelInfo->m_pBuffer, iBufferSize);
+
+        if (m_pTalkoverDucking->getMode() != EngineTalkoverDucking::OFF &&
+                pChannel->isTalkover()) {
+            m_pTalkoverDucking->processKey(pChannelInfo->m_pBuffer, iBufferSize);
+        }
+    }
+
+    // After all the engines have been processed, trigger post-processing
+    // which ensures that all channels are updating certain values at the
+    // same point in time.  This prevents sync from failing depending on
+    // if the sync target was processed before or after the sync origin.
+    foreach (ChannelInfo* pChannelInfo, m_activeChannels) {
+        pChannelInfo->m_pChannel->postProcess(iBufferSize);
+    }
+}
+
+void EngineMaster::process(const int iBufferSize) {
+    static bool haveSetName = false;
+    if (!haveSetName) {
+        QThread::currentThread()->setObjectName("Engine");
+        haveSetName = true;
+    }
+    Trace t("EngineMaster::process");
+
+    bool masterEnabled = m_pMasterEnabled->get();
+    bool headphoneEnabled = m_pHeadphoneEnabled->get();
+
+    unsigned int iSampleRate = static_cast<int>(m_pMasterSampleRate->get());
+    if (m_pEngineEffectsManager) {
+        m_pEngineEffectsManager->onCallbackStart();
+    }
+
+    // Bitvector of enabled channels
+    const unsigned int maxChannels = 32;
+    unsigned int busChannelConnectionFlags[3] = { 0, 0, 0 };
+    unsigned int headphoneOutput = 0;
+
+    // Update internal master sync rate.
+    m_pMasterSync->onCallbackStart(iSampleRate, iBufferSize);
+    // Prepare each channel for output
+    processChannels(busChannelConnectionFlags, &headphoneOutput, iBufferSize);
+    // Do internal master sync post-processing
+    m_pMasterSync->onCallbackEnd(iSampleRate, iBufferSize);
+
+    // Compute headphone mix
+    // Head phone left/right mix
+    CSAMPLE chead_gain = 1;
+    CSAMPLE cmaster_gain = 0;
+    if (masterEnabled) {
+        CSAMPLE cf_val = m_pHeadMix->get();
+        chead_gain = 0.5 * (-cf_val + 1.);
+        cmaster_gain = 0.5 * (cf_val + 1.);
+        // qDebug() << "head val " << cf_val << ", head " << chead_gain
+        //          << ", master " << cmaster_gain;
+    }
 
     // Mix all the enabled headphone channels together.
     m_headphoneGain.setGain(chead_gain);
 
-    ChannelMixer::mixChannels(m_channels, m_headphoneGain, headphoneOutput,
-                              maxChannels, &m_channelHeadphoneGainCache,
-                              m_pHead, iBufferSize);
-
-    // Make the mix for each output bus
-    for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; o++) {
-        ChannelMixer::mixChannels(m_channels, m_outputBus[o].m_gain,
-                                  busChannelConnectionFlags[o], maxChannels,
-                                  &m_outputBus[o].m_gainCache,
-                                  m_outputBus[o].m_pBuffer, iBufferSize);
+    if (m_bRampingGain) {
+        ChannelMixer::mixChannelsRamping(
+            m_channels, m_headphoneGain, headphoneOutput,
+            maxChannels, &m_channelHeadphoneGainCache,
+            m_pHead, iBufferSize);
+    } else {
+        ChannelMixer::mixChannels(
+            m_channels, m_headphoneGain, headphoneOutput,
+            maxChannels, &m_channelHeadphoneGainCache,
+            m_pHead, iBufferSize);
     }
 
     // Calculate the crossfader gains for left and right side of the crossfader
@@ -253,67 +364,155 @@ void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBuff
     EngineXfader::getXfadeGains(m_pCrossfader->get(), m_pXFaderCurve->get(),
                                 m_pXFaderCalibration->get(),
                                 m_pXFaderMode->get() == MIXXX_XFADER_CONSTPWR,
-                                m_pXFaderReverse->get() == 1.0,
+                                m_pXFaderReverse->toBool(),
                                 &c1_gain, &c2_gain);
 
-    // And mix the 3 buses into the master
-    float master_gain = m_pMasterVolume->get();
-    SampleUtil::copy3WithGain(m_pMaster,
-                              m_outputBus[EngineChannel::LEFT].m_pBuffer, c1_gain*master_gain,
-                              m_outputBus[EngineChannel::CENTER].m_pBuffer, master_gain,
-                              m_outputBus[EngineChannel::RIGHT].m_pBuffer, c2_gain*master_gain,
-                              iBufferSize);
+    // Channels with the talkover flag should be mixed with the master signal at
+    // full master volume.  All other channels should be adjusted by ducking gain.
+    m_masterGain.setGains(m_pTalkoverDucking->getGain(iBufferSize / 2),
+                          c1_gain, 1.0, c2_gain, 1.0);
 
-#ifdef __LADSPA__
-    // LADPSA master effects
-    m_pLadspa->process(m_pMaster, m_pMaster, iBufferSize);
-#endif
-
-    // Clipping
-    m_pClipping->process(m_pMaster, m_pMaster, iBufferSize);
-
-    // Balance values
-    CSAMPLE balright = 1.;
-    CSAMPLE balleft = 1.;
-    CSAMPLE bal = m_pBalance->get();
-    if (bal>0.)
-        balleft -= bal;
-    else if (bal<0.)
-        balright += bal;
-
-    // Perform balancing on main out
-    SampleUtil::applyAlternatingGain(m_pMaster, balleft, balright, iBufferSize);
-
-    // Update VU meter (it does not return anything). Needs to be here so that
-    // master balance is reflected in the VU meter.
-    if (m_pVumeter != NULL) {
-        m_pVumeter->process(m_pMaster, m_pMaster, iBufferSize);
+    // Make the mix for each output bus. m_masterGain takes care of applying the
+    // master volume, the channel volume, and the orientation gain.
+    for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; o++) {
+        if (m_bRampingGain) {
+            ChannelMixer::mixChannelsRamping(
+                m_channels, m_masterGain,
+                busChannelConnectionFlags[o], maxChannels,
+                &m_channelMasterGainCache,
+                m_pOutputBusBuffers[o], iBufferSize);
+        } else {
+            ChannelMixer::mixChannels(
+                m_channels, m_masterGain,
+                busChannelConnectionFlags[o], maxChannels,
+                &m_channelMasterGainCache,
+                m_pOutputBusBuffers[o], iBufferSize);
+        }
     }
 
-    //Submit master samples to the side chain to do shoutcasting, recording,
-    //etc.  (cpu intensive non-realtime tasks)
-    if (m_pSideChain != NULL) {
-        m_pSideChain->writeSamples(m_pMaster, iBufferSize);
+    // Process master channel effects
+    if (m_pEngineEffectsManager) {
+        GroupFeatureState busFeatures;
+        m_pEngineEffectsManager->process(getBusLeftGroup(), m_pOutputBusBuffers[0],
+                                         iBufferSize, iSampleRate, busFeatures);
+        m_pEngineEffectsManager->process(getBusCenterGroup(), m_pOutputBusBuffers[1],
+                                         iBufferSize, iSampleRate, busFeatures);
+        m_pEngineEffectsManager->process(getBusRightGroup(), m_pOutputBusBuffers[2],
+                                         iBufferSize, iSampleRate, busFeatures);
     }
 
-    // Add master to headphone with appropriate gain
-    SampleUtil::addWithRampingGain(m_pHead, m_pMaster, m_headphoneMasterGainOld,
-                                   cmaster_gain, iBufferSize);
-    m_headphoneMasterGainOld = cmaster_gain;
+    if (masterEnabled) {
+        // Mix the three channels together. We already mixed the busses together
+        // with the channel gains and overall master gain.
+        SampleUtil::copy3WithGain(m_pMaster,
+                                  m_pOutputBusBuffers[EngineChannel::LEFT], 1.0,
+                                  m_pOutputBusBuffers[EngineChannel::CENTER], 1.0,
+                                  m_pOutputBusBuffers[EngineChannel::RIGHT], 1.0,
+                                  iBufferSize);
 
-    // Head volume and clipping
-    CSAMPLE headphoneVolume = m_pHeadVolume->get();
-    SampleUtil::applyRampingGain(m_pHead, m_headphoneVolumeOld, headphoneVolume, iBufferSize);
-    m_headphoneVolumeOld = headphoneVolume;
-    m_pHeadClipping->process(m_pHead, m_pHead, iBufferSize);
+        // Process master channel effects
+        if (m_pEngineEffectsManager) {
+            GroupFeatureState masterFeatures;
+            // Well, this is delayed by one buffer (it's dependent on the
+            // output). Oh well.
+            if (m_pVumeter != NULL) {
+                m_pVumeter->collectFeatures(&masterFeatures);
+            }
+            m_pEngineEffectsManager->process(getMasterGroup(), m_pMaster,
+                                             iBufferSize, iSampleRate,
+                                             masterFeatures);
+        }
 
-    //Master/headphones interleaving is now done in
-    //SoundManager::requestBuffer() - Albert Nov 18/07
+        // Apply master volume after effects.
+        CSAMPLE master_volume = m_pMasterGain->get();
+        if (m_bRampingGain) {
+            SampleUtil::applyRampingGain(m_pMaster, m_masterVolumeOld,
+                                         master_volume, iBufferSize);
+        } else {
+            SampleUtil::applyGain(m_pMaster, master_volume, iBufferSize);
+        }
+        m_masterVolumeOld = master_volume;
 
-    // Do all timer things at the end of the callback
-    // Qt timers are not that useful in our case, because they
-    // are handled with priority without respecting the callback
-    m_pGuiTick->process();
+        // Balance values
+        CSAMPLE balright = 1.;
+        CSAMPLE balleft = 1.;
+        CSAMPLE bal = m_pBalance->get();
+        if (bal > 0.) {
+            balleft -= bal;
+        } else if (bal < 0.) {
+            balright += bal;
+        }
+
+        // Perform balancing on main out
+        SampleUtil::applyAlternatingGain(m_pMaster, balleft, balright, iBufferSize);
+
+        // Update VU meter (it does not return anything). Needs to be here so that
+        // master balance is reflected in the VU meter.
+        if (m_pVumeter != NULL) {
+            m_pVumeter->process(m_pMaster, iBufferSize);
+        }
+        // Submit master samples to the side chain to do shoutcasting, recording,
+        // etc. (cpu intensive non-realtime tasks)
+        if (m_pSideChain != NULL) {
+            m_pSideChain->writeSamples(m_pMaster, iBufferSize);
+        }
+
+        // Add master to headphone with appropriate gain
+        if (headphoneEnabled) {
+            if (m_bRampingGain) {
+                SampleUtil::addWithRampingGain(m_pHead, m_pMaster,
+                                               m_headphoneMasterGainOld,
+                                               cmaster_gain, iBufferSize);
+            } else {
+                SampleUtil::addWithGain(m_pHead, m_pMaster, cmaster_gain, iBufferSize);
+            }
+            m_headphoneMasterGainOld = cmaster_gain;
+        }
+    }
+
+
+    if (headphoneEnabled) {
+        // Process headphone channel effects
+        if (m_pEngineEffectsManager) {
+            GroupFeatureState headphoneFeatures;
+            m_pEngineEffectsManager->process(getHeadphoneGroup(), m_pHead,
+                                             iBufferSize, iSampleRate, headphoneFeatures);
+        }
+        // Head volume
+        CSAMPLE headphoneVolume = m_pHeadGain->get();
+        if (m_bRampingGain) {
+            SampleUtil::applyRampingGain(m_pHead, m_headphoneVolumeOld,
+                                         headphoneVolume, iBufferSize);
+        } else {
+            SampleUtil::applyGain(m_pHead, headphoneVolume, iBufferSize);
+        }
+        m_headphoneVolumeOld = headphoneVolume;
+    }
+
+    if (masterEnabled && headphoneEnabled) {
+        // If Head Split is enabled, replace the left channel of the pfl buffer
+        // with a mono mix of the headphone buffer, and the right channel of the pfl
+        // buffer with a mono mix of the master output buffer.
+        if (m_pHeadSplitEnabled->get()) {
+            for (int i = 0; i + 1 < iBufferSize; i += 2) {
+                m_pHead[i] = (m_pHead[i] + m_pHead[i + 1]) / 2;
+                m_pHead[i + 1] = (m_pMaster[i] + m_pMaster[i + 1]) / 2;
+            }
+        }
+    }
+
+    if (m_pMasterMonoMixdown->get()) {
+        SampleUtil::mixStereoToMono(m_pMaster, m_pMaster, iBufferSize);
+    }
+
+    if (masterEnabled) {
+        m_pMasterDelay->process(m_pMaster, iBufferSize);
+    } else {
+        SampleUtil::clear(m_pMaster, iBufferSize);
+    }
+    if (headphoneEnabled) {
+        m_pHeadDelay->process(m_pHead, iBufferSize);
+    }
 
     // We're close to the end of the callback. Wake up the engine worker
     // scheduler so that it runs the workers.
@@ -323,16 +522,19 @@ void EngineMaster::process(const CSAMPLE *, const CSAMPLE *pOut, const int iBuff
 void EngineMaster::addChannel(EngineChannel* pChannel) {
     ChannelInfo* pChannelInfo = new ChannelInfo();
     pChannelInfo->m_pChannel = pChannel;
-    pChannelInfo->m_pVolumeControl = new ControlLogpotmeter(
-            ConfigKey(pChannel->getGroup(), "volume"), 1.0);
+    pChannelInfo->m_pVolumeControl = new ControlAudioTaperPot(
+            ConfigKey(pChannel->getGroup(), "volume"), -20, 0, 1);
     pChannelInfo->m_pVolumeControl->setDefaultValue(1.0);
     pChannelInfo->m_pVolumeControl->set(1.0);
+    pChannelInfo->m_pMuteControl = new ControlPushButton(
+        ConfigKey(pChannel->getGroup(), "mute"));
+    pChannelInfo->m_pMuteControl->setButtonMode(ControlPushButton::POWERWINDOW);
     pChannelInfo->m_pBuffer = SampleUtil::alloc(MAX_BUFFER_LEN);
-    SampleUtil::applyGain(pChannelInfo->m_pBuffer, 0, MAX_BUFFER_LEN);
+    SampleUtil::clear(pChannelInfo->m_pBuffer, MAX_BUFFER_LEN);
     m_channels.push_back(pChannelInfo);
     m_channelHeadphoneGainCache.push_back(0);
     for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; o++) {
-        m_outputBus[o].m_gainCache.push_back(0);
+        m_channelMasterGainCache.push_back(0);
     }
 
     EngineBuffer* pBuffer = pChannelInfo->m_pChannel->getEngineBuffer();
@@ -343,8 +545,8 @@ void EngineMaster::addChannel(EngineChannel* pChannel) {
 }
 
 EngineChannel* EngineMaster::getChannel(QString group) {
-    for (QList<ChannelInfo*>::const_iterator i = m_channels.begin();
-         i != m_channels.end(); ++i) {
+    for (QList<ChannelInfo*>::const_iterator i = m_channels.constBegin();
+         i != m_channels.constEnd(); ++i) {
         ChannelInfo* pChannelInfo = *i;
         if (pChannelInfo->m_pChannel->getGroup() == group) {
             return pChannelInfo->m_pChannel;
@@ -359,7 +561,7 @@ const CSAMPLE* EngineMaster::getDeckBuffer(unsigned int i) const {
 
 const CSAMPLE* EngineMaster::getOutputBusBuffer(unsigned int i) const {
     if (i <= EngineChannel::RIGHT)
-        return m_outputBus[i].m_pBuffer;
+        return m_pOutputBusBuffers[i];
     return NULL;
 }
 
@@ -390,5 +592,45 @@ const CSAMPLE* EngineMaster::buffer(AudioOutput output) const {
         break;
     default:
         return NULL;
+    }
+}
+
+void EngineMaster::onOutputConnected(AudioOutput output) {
+    switch (output.getType()) {
+        case AudioOutput::MASTER:
+            // overwrite config option if a master output is configured
+            m_pMasterEnabled->set(1.0);
+            break;
+        case AudioOutput::HEADPHONES:
+            m_pHeadphoneEnabled->set(1.0);
+            break;
+        case AudioOutput::BUS:
+            m_bBusOutputConnected[output.getIndex()] = true;
+            break;
+        case AudioOutput::DECK:
+            // We don't track enabled decks.
+            break;
+        default:
+            break;
+    }
+}
+
+void EngineMaster::onOutputDisconnected(AudioOutput output) {
+    switch (output.getType()) {
+        case AudioOutput::MASTER:
+            // not used, because we need the master buffer for headphone mix
+            // and recording/broadcasting as well
+            break;
+        case AudioOutput::HEADPHONES:
+            m_pHeadphoneEnabled->set(1.0);
+            break;
+        case AudioOutput::BUS:
+            m_bBusOutputConnected[output.getIndex()] = false;
+            break;
+        case AudioOutput::DECK:
+            // We don't track enabled decks.
+            break;
+        default:
+            break;
     }
 }

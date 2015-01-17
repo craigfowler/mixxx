@@ -14,25 +14,17 @@
 *   (at your option) any later version.                                   *
 *                                                                         *
 ***************************************************************************/
-#include <qapplication.h>
 #include "configobject.h"
-#include <qdir.h>
-#include <QtDebug>
-#include "widget/wwidget.h"
 
-#ifdef __WINDOWS__
-#include <windows.h>
-#endif
-
-#ifdef __APPLE__
-#include <CoreFoundation/CoreFoundation.h>
-#endif
-
-#include <qiodevice.h>
+#include <QIODevice>
 #include <QTextStream>
-#include <math.h>
+#include <QApplication>
+#include <QDir>
+#include <QtDebug>
 
-#include "mixxx.h"
+#include "widget/wwidget.h"
+#include "util/cmdlineargs.h"
+#include "xmlparse.h"
 
 ConfigKey::ConfigKey() {
 }
@@ -70,7 +62,7 @@ ConfigValue::ConfigValue(int _value)
     value = QString::number(_value);
 }
 
-void ConfigValue::valCopy(const ConfigValue _value)
+void ConfigValue::valCopy(const ConfigValue& _value)
 {
     value = _value.value;
 }
@@ -95,18 +87,18 @@ ConfigValueKbd::ConfigValueKbd(QKeySequence key)
 //          qDebug() << "value" << value;
 }
 
-void ConfigValueKbd::valCopy(const ConfigValueKbd v)
+void ConfigValueKbd::valCopy(const ConfigValueKbd& v)
 {
     m_qKey = v.m_qKey;
     QTextStream(&value) << m_qKey.toString();
 }
 
-bool operator==(const ConfigValue & s1, const ConfigValue & s2)
+bool operator==(const ConfigValue& s1, const ConfigValue& s2)
 {
     return (s1.value.toUpper() == s2.value.toUpper());
 }
 
-bool operator==(const ConfigValueKbd & s1, const ConfigValueKbd & s2)
+bool operator==(const ConfigValueKbd& s1, const ConfigValueKbd& s2)
 {
     return (s1.value.toUpper() == s2.value.toUpper());
 }
@@ -200,7 +192,7 @@ ConfigKey *ConfigObject<ValueType>::get(ValueType v)
     while (iterator.hasNext())
     {
         it = iterator.next();
-        if (QString::compare(it->val->value, v.value, Qt::CaseInsensitive) == 0){
+        if (QString::compare(it->val->value, v.value, Qt::CaseInsensitive) == 0) {
             //qDebug() << "ConfigObject #534: QString::compare match for " << it->key->group << it->key->item;
             return it->key;
         }
@@ -282,7 +274,6 @@ template <class ValueType> bool ConfigObject<ValueType>::Parse()
     return true;
 }
 
-
 template <class ValueType> void ConfigObject<ValueType>::clear()
 {
     //Delete the pointers, because that's what we did before we
@@ -336,67 +327,58 @@ template <class ValueType> void ConfigObject<ValueType>::Save()
         }
         file.close();
         if (file.error()!=QFile::NoError) //could be better... should actually say what the error was..
-	  qDebug() << "Error while writing configuration file:" << file.errorString();
+      qDebug() << "Error while writing configuration file:" << file.errorString();
     }
 }
 
 template <class ValueType>
-QString ConfigObject<ValueType>::getResourcePath() {
-    //
-    // Find the config path, path where midi configuration files, skins etc. are stored.
-    // On Unix the search order is whats listed in mixxx.cfg, then UNIX_SHARE_PATH
-    // On Windows it is always (and only) app dir.
-    // On OS X it is the current directory and then the Resources/ dir in the app bundle
-    //
-    QString qResourcePath; // TODO: this only changes once (on first load) during a run should make this a singleton.
-
+QString ConfigObject<ValueType>::getResourcePath() const {
     // Try to read in the resource directory from the command line
-    qResourcePath = CmdlineArgs::Instance().getResourcePath();
+    QString qResourcePath = CmdlineArgs::Instance().getResourcePath();
 
-    if (qResourcePath.isNull() || qResourcePath.isEmpty()) {
+    if (qResourcePath.isEmpty()) {
+        QDir mixxxDir(QCoreApplication::applicationDirPath());
+        // We used to support using the mixxx.cfg's [Config],Path setting but
+        // this causes issues if you try and use two different versions of Mixxx
+        // on the same computer. See Bug #1392854. We start by checking if we're
+        // running out of a build root ('res' dir exists or our path ends with
+        // '_build') and if not then we fall back on a platform-specific method
+        // of determining the resource path (see comments below).
+        if (mixxxDir.cd("res")) {
+            // We are running out of the repository root.
+            qResourcePath = mixxxDir.absolutePath();
+        } else if (mixxxDir.absolutePath().endsWith("_build") &&
+                   mixxxDir.cdUp() && mixxxDir.cd("res")) {
+            // We are running out of the (lin|win|osx)XX_build folder.
+            qResourcePath = mixxxDir.absolutePath();
+        }
 #ifdef __UNIX__
-        // On Linux, check if the path is stored in the configuration database.
-        if (getValueString(ConfigKey("[Config]","Path")).length()>0 && QDir(getValueString(ConfigKey("[Config]","Path"))).exists())
-            qResourcePath = getValueString(ConfigKey("[Config]","Path"));
-        else
-        {
-            // Set the path according to the compile time define, UNIX_SHARE_PATH
+        // On Linux if all of the above fail the /usr/share path is the logical
+        // place to look.
+        else {
             qResourcePath = UNIX_SHARE_PATH;
         }
 #endif
 #ifdef __WINDOWS__
-        // On Windows, set the config dir relative to the application dir
-        qResourcePath = QCoreApplication::applicationDirPath();
+        // On Windows, set the config dir relative to the application dir if all
+        // of the above fail.
+        else {
+            qResourcePath = QCoreApplication::applicationDirPath();
+        }
 #endif
 #ifdef __APPLE__
-        /*
-        // Set the path relative to the bundle directory
-        CFURLRef pluginRef = CFBundleCopyBundleURL(CFBundleGetMainBundle());
-        CFStringRef macPath = CFURLCopyFileSystemPath(pluginRef, kCFURLPOSIXPathStyle);
-        char utf8path[256];
-        //Attempt to decode obtain the macPath string as UTF-8
-        if (CFStringGetCString(macPath, utf8path, sizeof(utf8path), kCFStringEncodingUTF8))
-        {
-        qConfigPath.fromUtf8(utf8path);
+        else if (mixxxDir.cdUp() && mixxxDir.cd("Resources")) {
+            // Release configuraton
+            qResourcePath = mixxxDir.absolutePath();
+        } else {
+            // TODO(rryan): What should we do here?
         }
-        else {
-        //Fallback on the "system encoding"... (this is just our old code, which probably doesn't make any sense
-        //since it plays roullette with the type of text encoding)
-        qConfigPath = CFStringGetCStringPtr(macPath, CFStringGetSystemEncoding());
-        }
-        qConfigPath.append("/Contents/Resources/"); //XXX this should really use QDir, this entire function should
-        */
-        QString mixxxPath = QCoreApplication::applicationDirPath();
-        if (mixxxPath.endsWith("osx_build"))   //Development configuration
-            qResourcePath = mixxxPath + "/../res";
-        else //Release configuraton
-            qResourcePath = mixxxPath + "/../Resources";
 #endif
     } else {
-        qDebug() << "Setting qResourcePath from location in resourcePath commandline arg:" << qResourcePath;
+        //qDebug() << "Setting qResourcePath from location in resourcePath commandline arg:" << qResourcePath;
     }
 
-    if (qResourcePath.length() == 0) {
+    if (qResourcePath.isEmpty()) {
         reportCriticalErrorAndQuit("qConfigPath is empty, this can not be so -- did our developer forget to define one of __UNIX__, __WINDOWS__, __APPLE__??");
     }
 
@@ -405,19 +387,19 @@ QString ConfigObject<ValueType>::getResourcePath() {
         qResourcePath.append("/");
     }
 
+    qDebug() << "Loading resources from " << qResourcePath;
+
     return qResourcePath;
 }
 
-
 template <class ValueType> ConfigObject<ValueType>::ConfigObject(QDomNode node) {
-
     if (!node.isNull() && node.isElement()) {
         QDomNode ctrl = node.firstChild();
 
         while (!ctrl.isNull()) {
             if(ctrl.nodeName() == "control") {
-                QString group = WWidget::selectNodeQString(ctrl, "group");
-                QString key = WWidget::selectNodeQString(ctrl, "key");
+                QString group = XmlParse::selectNodeQString(ctrl, "group");
+                QString key = XmlParse::selectNodeQString(ctrl, "key");
                 ConfigKey k(group, key);
                 ValueType m(ctrl);
                 set(k, m);
@@ -433,7 +415,13 @@ template <class ValueType> QString ConfigObject<ValueType>::getSettingsPath() co
     return configFileInfo.absoluteDir().absolutePath();
 }
 
+template <class ValueType> QHash<ConfigKey, ValueType> ConfigObject<ValueType>::toHash() const {
+    QHash<ConfigKey, ValueType> hash;
+    foreach (ConfigOption<ValueType>* pOption, m_list) {
+        hash.insert(*pOption->key, *pOption->val);
+    }
+    return hash;
+}
 
 template class ConfigObject<ConfigValue>;
 template class ConfigObject<ConfigValueKbd>;
-

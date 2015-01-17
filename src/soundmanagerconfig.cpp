@@ -17,7 +17,8 @@
 #include "soundmanagerutil.h"
 #include "sounddevice.h"
 #include "soundmanager.h"
-#include "mixxx.h"
+#include "util/cmdlineargs.h"
+#include "util/math.h"
 
 // this (7) represents latency values from 1 ms to about 80 ms -- bkgood
 const unsigned int SoundManagerConfig::kMaxAudioBufferSizeIndex = 7;
@@ -25,13 +26,18 @@ const unsigned int SoundManagerConfig::kMaxAudioBufferSizeIndex = 7;
 const QString SoundManagerConfig::kDefaultAPI = QString("None");
 // Sample Rate even the cheap sound Devices will support most likely
 const unsigned int SoundManagerConfig::kFallbackSampleRate = 48000;
+const unsigned int SoundManagerConfig::kDefaultDeckCount = 2;
 // audioBufferSizeIndex=5 means about 21 ms of latency which is default in trunk r2453 -- bkgood
 const int SoundManagerConfig::kDefaultAudioBufferSizeIndex = 5;
 
-SoundManagerConfig::SoundManagerConfig() 
+const int SoundManagerConfig::kDefaultSyncBuffers = 2;
+
+SoundManagerConfig::SoundManagerConfig()
     : m_api("None"),
       m_sampleRate(kFallbackSampleRate),
-      m_audioBufferSizeIndex(kDefaultAudioBufferSizeIndex) {
+      m_deckCount(kDefaultDeckCount),
+      m_audioBufferSizeIndex(kDefaultAudioBufferSizeIndex),
+      m_syncBuffers(2) {
     m_configFile = QFileInfo(CmdlineArgs::Instance().getSettingsPath() + SOUNDMANAGERCONFIG_FILENAME);
 }
 
@@ -62,6 +68,9 @@ bool SoundManagerConfig::readFromDisk() {
     setSampleRate(rootElement.attribute("samplerate", "0").toUInt());
     // audioBufferSizeIndex is refereed as "latency" in the config file
     setAudioBufferSizeIndex(rootElement.attribute("latency", "0").toUInt());
+    setSyncBuffers(rootElement.attribute("sync_buffers", "2").toUInt());
+    setDeckCount(rootElement.attribute("deck_count",
+                                       QString(kDefaultDeckCount)).toUInt());
     clearOutputs();
     clearInputs();
     QDomNodeList devElements(rootElement.elementsByTagName("SoundDevice"));
@@ -115,7 +124,10 @@ bool SoundManagerConfig::writeToDisk() const {
     docElement.setAttribute("samplerate", m_sampleRate);
     // audioBufferSizeIndex is refereed as "latency" in the config file
     docElement.setAttribute("latency", m_audioBufferSizeIndex);
+    docElement.setAttribute("sync_buffers", m_syncBuffers);
+    docElement.setAttribute("deck_count", m_deckCount);
     doc.appendChild(docElement);
+
     foreach (QString device, m_outputs.keys().toSet().unite(m_inputs.keys().toSet())) {
         QDomElement devElement(doc.createElement("SoundDevice"));
         devElement.setAttribute("name", device);
@@ -131,6 +143,7 @@ bool SoundManagerConfig::writeToDisk() const {
         }
         docElement.appendChild(devElement);
     }
+
     QFile file(m_configFile.absoluteFilePath());
     if (!file.open(QIODevice::Truncate | QIODevice::WriteOnly)) {
         return false;
@@ -172,6 +185,16 @@ void SoundManagerConfig::setSampleRate(unsigned int sampleRate) {
     m_sampleRate = sampleRate != 0 ? sampleRate : kFallbackSampleRate;
 }
 
+
+unsigned int SoundManagerConfig::getSyncBuffers() const {
+    return m_syncBuffers;
+}
+
+void SoundManagerConfig::setSyncBuffers(unsigned int syncBuffers) {
+    // making sure we don't divide by zero elsewhere
+    m_syncBuffers = qMin(syncBuffers, (unsigned int)2);
+}
+
 /**
  * Checks that the sample rate in the object is valid according to the list of
  * sample rates given by SoundManager.
@@ -185,19 +208,60 @@ bool SoundManagerConfig::checkSampleRate(const SoundManager &soundManager) {
     return true;
 }
 
+unsigned int SoundManagerConfig::getDeckCount() const {
+    return m_deckCount;
+}
+
+void SoundManagerConfig::setDeckCount(unsigned int deckCount) {
+    m_deckCount = deckCount;
+}
+
+void SoundManagerConfig::setCorrectDeckCount(int configuredDeckCount) {
+    int minimum_deck_count = 0;
+
+    foreach (QString device, m_outputs.keys().toSet().unite(m_inputs.keys().toSet())) {
+        foreach (AudioInput in, m_inputs.values(device)) {
+            if ((in.getType() == AudioInput::DECK ||
+                 in.getType() == AudioInput::VINYLCONTROL ||
+                 in.getType() == AudioInput::AUXILIARY) &&
+                in.getIndex() + 1 > minimum_deck_count) {
+                qDebug() << "Found an input connection above current deck count";
+                minimum_deck_count = in.getIndex() + 1;
+            }
+        }
+        foreach (AudioOutput out, m_outputs.values(device)) {
+            if (out.getType() == AudioOutput::DECK &&
+                    out.getIndex() + 1 > minimum_deck_count) {
+                qDebug() << "Found an output connection above current deck count";
+                minimum_deck_count = out.getIndex() + 1;
+            }
+        }
+    }
+
+    if (minimum_deck_count > configuredDeckCount) {
+        m_deckCount = minimum_deck_count;
+    } else {
+        m_deckCount = configuredDeckCount;
+    }
+}
+
 unsigned int SoundManagerConfig::getAudioBufferSizeIndex() const {
     return m_audioBufferSizeIndex;
 }
 
 unsigned int SoundManagerConfig::getFramesPerBuffer() const {
-    Q_ASSERT(m_audioBufferSizeIndex > 0); // endless loop otherwise
+    // endless loop otherwise
+    unsigned int audioBufferSizeIndex = m_audioBufferSizeIndex;
+    DEBUG_ASSERT_AND_HANDLE(audioBufferSizeIndex > 0) {
+        audioBufferSizeIndex = kDefaultAudioBufferSizeIndex;
+    }
     unsigned int framesPerBuffer = 1;
     double sampleRate = m_sampleRate; // need this to avoid int division
     // first, get to the framesPerBuffer value corresponding to latency index 1
     for (; framesPerBuffer / sampleRate * 1000 < 1.0; framesPerBuffer *= 2) {
     }
     // then, keep going until we get to our desired latency index (if not 1)
-    for (unsigned int latencyIndex = 1; latencyIndex < m_audioBufferSizeIndex; ++latencyIndex) {
+    for (unsigned int latencyIndex = 1; latencyIndex < audioBufferSizeIndex; ++latencyIndex) {
         framesPerBuffer <<= 1; // *= 2
     }
     return framesPerBuffer;
@@ -328,7 +392,7 @@ void SoundManagerConfig::loadDefaults(SoundManager *soundManager, unsigned int f
                 if (device->getNumOutputChannels() < 2) {
                     continue;
                 }
-                AudioOutput masterOut(AudioPath::MASTER, 0);
+                AudioOutput masterOut(AudioPath::MASTER, 0, 2, 0);
                 addOutput(device->getInternalName(), masterOut);
                 defaultSampleRate = device->getDefaultSampleRate();
                 break;
@@ -349,4 +413,6 @@ void SoundManagerConfig::loadDefaults(SoundManager *soundManager, unsigned int f
         }
         m_audioBufferSizeIndex = kDefaultAudioBufferSizeIndex;
     }
+
+    m_syncBuffers = kDefaultSyncBuffers;
 }

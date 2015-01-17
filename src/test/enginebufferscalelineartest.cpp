@@ -4,10 +4,13 @@
 #include <QtDebug>
 #include <QVector>
 
-#include "defs.h"
-#include "configobject.h"
+#include "util/types.h"
+#include "util/math.h"
 #include "engine/readaheadmanager.h"
 #include "engine/enginebufferscalelinear.h"
+#include "sampleutil.h"
+
+#include "test/mixxxtest.h"
 
 using ::testing::StrictMock;
 using ::testing::Return;
@@ -27,6 +30,7 @@ class ReadAheadManagerMock : public ReadAheadManager {
     }
 
     int getNextSamplesFake(double dRate, CSAMPLE* buffer, int requested_samples) {
+        Q_UNUSED(dRate);
         bool hasBuffer = m_pBuffer != NULL;
         // You forgot to set the mock read buffer.
         EXPECT_TRUE(hasBuffer);
@@ -56,23 +60,24 @@ class ReadAheadManagerMock : public ReadAheadManager {
     int m_iSamplesRead;
 };
 
-class EngineBufferScaleLinearTest : public testing::Test {
+class EngineBufferScaleLinearTest : public MixxxTest {
   protected:
     virtual void SetUp() {
-        m_pConfig = new ConfigObject<ConfigValue>("");
         m_pReadAheadMock = new StrictMock<ReadAheadManagerMock>();
         m_pScaler = new EngineBufferScaleLinear(m_pReadAheadMock);
     }
 
     virtual void TearDown() {
-        delete m_pConfig;
         delete m_pScaler;
         delete m_pReadAheadMock;
     }
 
     void SetRate(double rate) {
-        m_pScaler->setTempo(1.0);
-        m_pScaler->setBaseRate(rate);
+        double tempoRatio = rate;
+        double pitchRatio = rate;
+        m_pScaler->setScaleParameters(
+            44100, 1.0,
+            &tempoRatio, &pitchRatio);
     }
 
     void SetRateNoLerp(double rate) {
@@ -82,13 +87,11 @@ class EngineBufferScaleLinearTest : public testing::Test {
     }
 
     void ClearBuffer(CSAMPLE* pBuffer, int length) {
-        memset(pBuffer, 0, sizeof(pBuffer[0])*length);
+        SampleUtil::clear(pBuffer, length);
     }
 
     void FillBuffer(CSAMPLE* pBuffer, CSAMPLE value, int length) {
-        for (int i = 0; i < length; ++i) {
-            pBuffer[i] = value;
-        }
+        SampleUtil::fill(pBuffer, value, length);
     }
 
     void AssertWholeBufferEquals(const CSAMPLE* pBuffer, CSAMPLE value, int iBufferLen) {
@@ -124,7 +127,6 @@ class EngineBufferScaleLinearTest : public testing::Test {
         }
     }
 
-    ConfigObject<ConfigValue>* m_pConfig;
     StrictMock<ReadAheadManagerMock>* m_pReadAheadMock;
     EngineBufferScaleLinear* m_pScaler;
 };
@@ -175,8 +177,8 @@ TEST_F(EngineBufferScaleLinearTest, UnityRateIsSamplePerfect) {
 
 TEST_F(EngineBufferScaleLinearTest, TestRateLERPMonotonicallyProgresses) {
     // Starting from a rate of 0.0, we'll go to a rate of 1.0
-    SetRate(0.0f);
-    SetRate(1.0f);
+    SetRate(0.0);
+    SetRate(1.0);
 
     const int bufferSize = kiLinearScaleReadAheadLength;
 
@@ -194,7 +196,7 @@ TEST_F(EngineBufferScaleLinearTest, TestRateLERPMonotonicallyProgresses) {
 }
 
 TEST_F(EngineBufferScaleLinearTest, TestDoubleSpeedSmoothlyHalvesSamples) {
-    SetRateNoLerp(2.0f);
+    SetRateNoLerp(2.0);
     const int bufferSize = kiLinearScaleReadAheadLength;
 
     // To prove that the channels don't touch each other, we're using negative
@@ -223,7 +225,7 @@ TEST_F(EngineBufferScaleLinearTest, TestDoubleSpeedSmoothlyHalvesSamples) {
 }
 
 TEST_F(EngineBufferScaleLinearTest, TestHalfSpeedSmoothlyDoublesSamples) {
-    SetRateNoLerp(0.5f);
+    SetRateNoLerp(0.5);
     const int bufferSize = kiLinearScaleReadAheadLength;
 
     // To prove that the channels don't touch each other, we're using negative
@@ -253,7 +255,7 @@ TEST_F(EngineBufferScaleLinearTest, TestHalfSpeedSmoothlyDoublesSamples) {
 }
 
 TEST_F(EngineBufferScaleLinearTest, TestRepeatedScaleCalls) {
-    SetRateNoLerp(0.5f);
+    SetRateNoLerp(0.5);
     const int bufferSize = kiLinearScaleReadAheadLength;
 
     // To prove that the channels don't touch each other, we're using negative

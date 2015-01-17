@@ -1,18 +1,18 @@
 #include "library/hiddentablemodel.h"
 
 HiddenTableModel::HiddenTableModel(QObject* parent,
-                                     TrackCollection* pTrackCollection)
-        : BaseSqlTableModel(parent,pTrackCollection,"mixxx.db.model.missing") {
+                                   TrackCollection* pTrackCollection)
+        : BaseSqlTableModel(parent, pTrackCollection, "mixxx.db.model.missing") {
     setTableModel();
 }
 
 HiddenTableModel::~HiddenTableModel() {
 }
 
-void HiddenTableModel::setTableModel(int id){
+void HiddenTableModel::setTableModel(int id) {
     Q_UNUSED(id);
     QSqlQuery query;
-    QString tableName("hidden_songs");
+    const QString tableName("hidden_songs");
 
     QStringList columns;
     columns << "library." + LIBRARYTABLE_ID;
@@ -36,12 +36,9 @@ void HiddenTableModel::setTableModel(int id){
     QStringList tableColumns;
     tableColumns << LIBRARYTABLE_ID;
     setTable(tableName, LIBRARYTABLE_ID, tableColumns,
-             m_pTrackCollection->getTrackSource("default"));
-
-    initHeaderData();
+             m_pTrackCollection->getTrackSource());
     setDefaultSort(fieldIndex("artist"), Qt::AscendingOrder);
     setSearch("");
-
 }
 
 void HiddenTableModel::purgeTracks(const QModelIndexList& indices) {
@@ -56,7 +53,7 @@ void HiddenTableModel::purgeTracks(const QModelIndexList& indices) {
 
     // TODO(rryan) : do not select, instead route event to BTC and notify from
     // there.
-    select(); //Repopulate the data model.
+    select(); // Repopulate the data model.
 }
 
 void HiddenTableModel::unhideTracks(const QModelIndexList& indices) {
@@ -71,21 +68,20 @@ void HiddenTableModel::unhideTracks(const QModelIndexList& indices) {
 
     // TODO(rryan) : do not select, instead route event to BTC and notify from
     // there.
-    select(); //Repopulate the data model.
+    select(); // Repopulate the data model.
 }
 
 bool HiddenTableModel::isColumnInternal(int column) {
-    if (column == fieldIndex(LIBRARYTABLE_ID) ||
-        column == fieldIndex(LIBRARYTABLE_PLAYED) ||
-        column == fieldIndex(LIBRARYTABLE_BPM_LOCK) ||
-        column == fieldIndex(LIBRARYTABLE_MIXXXDELETED) ||
-        column == fieldIndex(TRACKLOCATIONSTABLE_FSDELETED)) {
-        return true;
-    }
-    return false;
-}
-bool HiddenTableModel::isColumnHiddenByDefault(int column) {
-    if (column == fieldIndex(LIBRARYTABLE_KEY)) {
+    if (column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_ID) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_PLAYED) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BPM_LOCK) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_MIXXXDELETED) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_KEY_ID)||
+            column == fieldIndex(ColumnCache::COLUMN_TRACKLOCATIONSTABLE_FSDELETED) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_SOURCE) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_TYPE) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_LOCATION) ||
+            column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_HASH)) {
         return true;
     }
     return false;

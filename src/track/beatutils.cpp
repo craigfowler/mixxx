@@ -9,13 +9,13 @@
 #include <QString>
 #include <QList>
 #include <QMap>
-#include <math.h>
 
 #include "track/beatutils.h"
+#include "util/math.h"
 
 // we are generous and assume the global_BPM to be at most 0.05 BPM far away
 // from the correct one
-#define BPM_ERROR 0.05f
+#define BPM_ERROR 0.05
 
 // the raw beatgrid is divided into blocks of size N from which the local bpm is
 // computed. Tweaked from 8 to 12 which improves the BPM accurancy for 'problem songs'.
@@ -44,7 +44,7 @@ void BeatUtils::printBeatStatistics(const QVector<double>& beats, int SampleRate
 
         qDebug() << "Beat" << i << "local BPM:" << local_bpm;
 
-        local_bpm = floorf(local_bpm * kHistogramDecimalScale + 0.5) / kHistogramDecimalScale;
+        local_bpm = floor(local_bpm * kHistogramDecimalScale + 0.5) / kHistogramDecimalScale;
         frequency[local_bpm] += 1;
     }
 
@@ -93,7 +93,7 @@ QList<double> BeatUtils::computeWindowedBpmsAndFrequencyHistogram(
         double localBpm = 60.0 * windowSize / time;
 
         // round BPM to have two decimal places
-        double roundedBpm = floorf(localBpm * kHistogramDecimalScale + 0.5) /
+        double roundedBpm = floor(localBpm * kHistogramDecimalScale + 0.5) /
                 kHistogramDecimalScale;
 
         // add to local BPM to list and increment frequency count
@@ -139,7 +139,8 @@ double BeatUtils::computeFilteredWeightedAverage(
     return filterWeightedAverage / static_cast<double>(filterSum);
 }
 
-double BeatUtils::calculateBpm(const QVector<double>& beats, int SampleRate, int min_bpm, int max_bpm){
+double BeatUtils::calculateBpm(const QVector<double>& beats, int SampleRate,
+                               int min_bpm, int max_bpm) {
     /*
      * Let's compute the average local
      * BPM for N subsequent beats.
@@ -248,7 +249,7 @@ double BeatUtils::calculateBpm(const QVector<double>& beats, int SampleRate, int
          double time = (beat_end - beat_start)/SampleRate;
          double local_bpm = 60.0 * N / time;
          // round BPM to have two decimal places
-         local_bpm = floorf(local_bpm * kHistogramDecimalScale + 0.5) / kHistogramDecimalScale;
+         local_bpm = floor(local_bpm * kHistogramDecimalScale + 0.5) / kHistogramDecimalScale;
 
          //qDebug() << "Local BPM beat " << i << ": " << local_bpm;
          if (!foundFirstCorrectBeat &&
@@ -374,7 +375,7 @@ double BeatUtils::findFirstCorrectBeat(const QVector<double> rawbeats,
 
     // If we didn't find any beat that matched the window, return the first
     // beat.
-    return !rawbeats.empty() ? rawbeats.first() : 0.0f;
+    return !rawbeats.empty() ? rawbeats.first() : 0.0;
 }
 
 // static

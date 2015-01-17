@@ -9,9 +9,9 @@
 
 #include "configobject.h"
 #include "analyser.h"
+#include "soundsource.h"
 #include "trackinfoobject.h"
 
-class SoundSourceProxy;
 class TrackCollection;
 
 class AnalyserQueue : public QThread {
@@ -24,9 +24,9 @@ class AnalyserQueue : public QThread {
     void queueAnalyseTrack(TrackPointer tio);
 
     static AnalyserQueue* createDefaultAnalyserQueue(
-            ConfigObject<ConfigValue>* _config, TrackCollection* pTrackCollection);
+            ConfigObject<ConfigValue>* pConfig, TrackCollection* pTrackCollection);
     static AnalyserQueue* createAnalysisFeatureAnalyserQueue(
-            ConfigObject<ConfigValue>* _config, TrackCollection* pTrackCollection);
+            ConfigObject<ConfigValue>* pConfig, TrackCollection* pTrackCollection);
 
   public slots:
     void slotAnalyseTrack(TrackPointer tio);
@@ -58,11 +58,13 @@ class AnalyserQueue : public QThread {
 
     bool isLoadedTrackWaiting(TrackPointer tio);
     TrackPointer dequeueNextBlocking();
-    bool doAnalysis(TrackPointer tio, SoundSourceProxy* pSoundSource);
+    bool doAnalysis(TrackPointer tio, const Mixxx::SoundSourcePointer& pSoundSource);
     void emitUpdateProgress(TrackPointer tio, int progress);
 
     bool m_exit;
     QAtomicInt m_aiCheckPriorities;
+    SAMPLE* m_pSamplesPCM;
+    CSAMPLE* m_pSamples;
 
     // The processing queue and associated mutex
     QQueue<TrackPointer> m_tioq;

@@ -3,6 +3,8 @@
 
 #include "library/basetrackcache.h"
 
+#include <QScopedPointer>
+
 #include "library/trackcollection.h"
 #include "library/searchqueryparser.h"
 #include "library/queryutil.h"
@@ -11,37 +13,29 @@ namespace {
 
 const bool sDebug = false;
 
-const QHash<QString, int> buildReverseIndex(const QList<QString> items) {
-    int i = 0;
-    QHash<QString, int> index;
-    foreach (const QString item, items) {
-        index[item] = i++;
-    }
-    return index;
-}
-
 }  // namespace
 
 BaseTrackCache::BaseTrackCache(TrackCollection* pTrackCollection,
-                               QString tableName,
-                               QString idColumn,
-                               QList<QString> columns,
+                               const QString& tableName,
+                               const QString& idColumn,
+                               const QStringList& columns,
                                bool isCaching)
         : QObject(),
           m_tableName(tableName),
           m_idColumn(idColumn),
-          m_columns(columns),
-          m_columnsJoined(m_columns.join(",")),
-          m_columnIndex(buildReverseIndex(m_columns)),
+          m_columnCount(columns.size()),
+          m_columnsJoined(columns.join(",")),
+          m_columnCache(columns),
           m_bIndexBuilt(false),
           m_bIsCaching(isCaching),
-          m_pTrackCollection(pTrackCollection),
-          m_trackDAO(m_pTrackCollection->getTrackDAO()),
-          m_database(m_pTrackCollection->getDatabase()),
-          m_pQueryParser(new SearchQueryParser(m_pTrackCollection->getDatabase())) {
+          m_trackDAO(pTrackCollection->getTrackDAO()),
+          m_database(pTrackCollection->getDatabase()),
+          m_pQueryParser(new SearchQueryParser(pTrackCollection->getDatabase())) {
     m_searchColumns << "artist"
                     << "album"
+                    << "album_artist"
                     << "location"
+                    << "grouping"
                     << "comment"
                     << "title"
                     << "genre";
@@ -50,36 +44,24 @@ BaseTrackCache::BaseTrackCache(TrackCollection* pTrackCollection,
     // them a bunch.
     m_searchColumnIndices.resize(m_searchColumns.size());
     for (int i = 0; i < m_searchColumns.size(); ++i) {
-        m_searchColumnIndices[i] = m_columnIndex.value(m_searchColumns[i], -1);
+        m_searchColumnIndices[i] = m_columnCache.fieldIndex(m_searchColumns[i]);
     }
-
-    // Duplicated from searchqueryparser.cpp
-    m_numericFilters << "year"
-                     << "track"
-                     << "bpm"
-                     << "duration"
-                     << "played"
-                     << "rating"
-                     << "bitrate";
-    m_operatorMatcher = QRegExp("^(>|>=|=|<|<=)(.*)$");
-    m_numericFilterMatcher = QRegExp(QString("^(%1):(.*)$").arg(m_numericFilters.join("|")));
-    m_stringFilterMatcher = QRegExp(QString("^(%1):(.*)$").arg(m_searchColumns.join("|")));
 }
 
 BaseTrackCache::~BaseTrackCache() {
     delete m_pQueryParser;
 }
 
-const QStringList BaseTrackCache::columns() const {
-    return m_columns;
-}
-
 int BaseTrackCache::columnCount() const {
-    return m_columns.size();
+    return m_columnCount;
 }
 
-int BaseTrackCache::fieldIndex(const QString columnName) const {
-    return m_columnIndex.value(columnName, -1);
+int BaseTrackCache::fieldIndex(ColumnCache::Column column) const {
+    return m_columnCache.fieldIndex(column);
+}
+
+int BaseTrackCache::fieldIndex(const QString& columnName) const {
+    return m_columnCache.fieldIndex(columnName);
 }
 
 void BaseTrackCache::slotTracksAdded(QSet<int> trackIds) {
@@ -142,8 +124,9 @@ void BaseTrackCache::ensureCached(QSet<int> trackIds) {
 }
 
 TrackPointer BaseTrackCache::lookupCachedTrack(int trackId) const {
-    // Only get the Track from the TrackDAO if it's in the cache
-    if (m_bIsCaching) {
+    // Only get the track from the TrackDAO if it's in the cache and marked as
+    // dirty.
+    if (m_bIsCaching && m_dirtyTracks.contains(trackId)) {
         return m_trackDAO.getTrack(trackId, true);
     }
     return TrackPointer();
@@ -168,7 +151,6 @@ bool BaseTrackCache::updateIndexWithTrackpointer(TrackPointer pTrack) {
         QVector<QVariant>& record = m_trackInfo[id];
         // prealocate memory for all columns at once
         record.resize(numColumns);
-
         for (int i = 0; i < numColumns; ++i) {
             getTrackValueForColumn(pTrack, i, record[i]);
         }
@@ -176,7 +158,7 @@ bool BaseTrackCache::updateIndexWithTrackpointer(TrackPointer pTrack) {
     return true;
 }
 
-bool BaseTrackCache::updateIndexWithQuery(QString queryString) {
+bool BaseTrackCache::updateIndexWithQuery(const QString& queryString) {
     QTime timer;
     timer.start();
 
@@ -278,44 +260,61 @@ void BaseTrackCache::getTrackValueForColumn(TrackPointer pTrack,
 
     // TODO(XXX) Qt properties could really help here.
     // TODO(rryan) this is all TrackDAO specific. What about iTunes/RB/etc.?
-    if (fieldIndex(LIBRARYTABLE_ARTIST) == column) {
+    if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_ARTIST) == column) {
         trackValue.setValue(pTrack->getArtist());
-    } else if (fieldIndex(LIBRARYTABLE_TITLE) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_TITLE) == column) {
         trackValue.setValue(pTrack->getTitle());
-    } else if (fieldIndex(LIBRARYTABLE_ALBUM) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_ALBUM) == column) {
         trackValue.setValue(pTrack->getAlbum());
-    } else if (fieldIndex(LIBRARYTABLE_YEAR) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_ALBUMARTIST) == column) {
+        trackValue.setValue(pTrack->getAlbumArtist());
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_YEAR) == column) {
         trackValue.setValue(pTrack->getYear());
-    } else if (fieldIndex(LIBRARYTABLE_DATETIMEADDED) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_DATETIMEADDED) == column) {
         trackValue.setValue(pTrack->getDateAdded());
-    } else if (fieldIndex(LIBRARYTABLE_GENRE) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_GENRE) == column) {
         trackValue.setValue(pTrack->getGenre());
-    } else if (fieldIndex(LIBRARYTABLE_COMPOSER) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COMPOSER) == column) {
         trackValue.setValue(pTrack->getComposer());
-    } else if (fieldIndex(LIBRARYTABLE_FILETYPE) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_GROUPING) == column) {
+        trackValue.setValue(pTrack->getGrouping());
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_FILETYPE) == column) {
         trackValue.setValue(pTrack->getType());
-    } else if (fieldIndex(LIBRARYTABLE_TRACKNUMBER) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_TRACKNUMBER) == column) {
         trackValue.setValue(pTrack->getTrackNumber());
-    } else if (fieldIndex(LIBRARYTABLE_LOCATION) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_LOCATION) == column) {
         trackValue.setValue(pTrack->getLocation());
-    } else if (fieldIndex(LIBRARYTABLE_COMMENT) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COMMENT) == column) {
         trackValue.setValue(pTrack->getComment());
-    } else if (fieldIndex(LIBRARYTABLE_DURATION) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_DURATION) == column) {
         trackValue.setValue(pTrack->getDuration());
-    } else if (fieldIndex(LIBRARYTABLE_BITRATE) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BITRATE) == column) {
         trackValue.setValue(pTrack->getBitrate());
-    } else if (fieldIndex(LIBRARYTABLE_BPM) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BPM) == column) {
         trackValue.setValue(pTrack->getBpm());
-    } else if (fieldIndex(LIBRARYTABLE_PLAYED) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_PLAYED) == column) {
         trackValue.setValue(pTrack->getPlayed());
-    } else if (fieldIndex(LIBRARYTABLE_TIMESPLAYED) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_TIMESPLAYED) == column) {
         trackValue.setValue(pTrack->getTimesPlayed());
-    } else if (fieldIndex(LIBRARYTABLE_RATING) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_RATING) == column) {
         trackValue.setValue(pTrack->getRating());
-    } else if (fieldIndex(LIBRARYTABLE_KEY) == column) {
-        trackValue.setValue(pTrack->getKey());
-    } else if (fieldIndex(LIBRARYTABLE_BPM_LOCK) == column) {
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_KEY) == column) {
+        trackValue.setValue(pTrack->getKeyText());
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_KEY_ID) == column) {
+        trackValue.setValue(static_cast<int>(pTrack->getKey()));
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BPM_LOCK) == column) {
         trackValue.setValue(pTrack->hasBpmLock());
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_LOCATION) == column) {
+        trackValue.setValue(pTrack->getCoverInfo().coverLocation);
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_HASH) == column ||
+               fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART) == column) {
+        // For sorting, we give COLUMN_LIBRARYTABLE_COVERART the same value as
+        // the cover hash.
+        trackValue.setValue(pTrack->getCoverInfo().hash);
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_SOURCE) == column) {
+        trackValue.setValue(static_cast<int>(pTrack->getCoverInfo().source));
+    } else if (fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART_TYPE) == column) {
+        trackValue.setValue(static_cast<int>(pTrack->getCoverInfo().type));
     }
 }
 
@@ -327,15 +326,7 @@ QVariant BaseTrackCache::data(int trackId, int column) const {
         return result;
     }
 
-    // TODO(rryan): allow as an argument
-    TrackPointer pTrack;
-
-    // The caller can optionally provide a pTrack if they already looked it
-    // up. This is just an optimization to help reduce the # of calls to
-    // lookupCachedTrack. If they didn't provide it, look it up.
-    if (!pTrack) {
-        pTrack = lookupCachedTrack(trackId);
-    }
+    TrackPointer pTrack = lookupCachedTrack(trackId);
     if (pTrack) {
         getTrackValueForColumn(pTrack, column, result);
     }
@@ -356,164 +347,6 @@ QVariant BaseTrackCache::data(int trackId, int column) const {
         }
     }
     return result;
-}
-
-bool BaseTrackCache::trackMatches(const TrackPointer& pTrack,
-                                  const QRegExp& matcher) const {
-    // For every search column, lookup the value for the track and check
-    // if it matches the search query.
-    // To properly AND search queries, concatenate all searchable fields
-    QString combined_values;
-    int i = 0;
-    foreach (QString column, m_searchColumns) {
-        int columnIndex = m_searchColumnIndices[i++];
-        QVariant value;
-        getTrackValueForColumn(pTrack, columnIndex, value);
-        if (value.isValid() && qVariantCanConvert<QString>(value)) {
-            QString valueStr = value.toString();
-            combined_values += valueStr + " ";
-        }
-    }
-    return combined_values.contains(matcher);
-}
-
-bool BaseTrackCache::trackMatchesNumeric(const TrackPointer& pTrack,
-                                     const QStringList& numericMatchers) const {
-    foreach(QString numericMatcher, numericMatchers)
-    {
-        QString field, expression;
-        if (m_numericFilterMatcher.indexIn(numericMatcher) == -1) {
-            continue;
-        }
-        field = m_numericFilterMatcher.cap(1);
-        expression = m_numericFilterMatcher.cap(2);
-        if (field == "year") {
-            if (! evaluateNumeric(pTrack->getYear().toInt(), expression)) {
-                return false;
-            }
-        } else if (field == "track") {
-            if (! evaluateNumeric(pTrack->getTrackNumber().toInt(), expression)) {
-                return false;
-            }
-        } else if (field == "bpm") {
-            if (! evaluateNumeric((int)pTrack->getBpm(), expression)) {
-                return false;
-            }
-        } else if (field == "duration") {
-            if (! evaluateNumeric(pTrack->getDuration(), expression)) {
-                return false;
-            }
-        } else if (field == "played") {
-            if (! evaluateNumeric(pTrack->getTimesPlayed(), expression)) {
-                return false;
-            }
-        } else if (field == "rating") {
-            if (! evaluateNumeric(pTrack->getRating(), expression)) {
-                return false;
-            }
-        } else if (field == "bitrate") {
-            if (! evaluateNumeric(pTrack->getBitrate(), expression)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-bool BaseTrackCache::evaluateNumeric(const int value, const QString& expression) const {
-    // This is mostly duplicated from searchqueryparser.cpp
-    QString op = "=";
-    if (m_operatorMatcher.indexIn(expression) != -1) {
-        op = m_operatorMatcher.cap(1);
-        QString sCompare = m_operatorMatcher.cap(2);
-
-        bool parsed = false;
-        // Try to convert to see if it parses.
-        // TODO: this is double to be the same as searchqueryparser,
-        // but everything we are comparing are ints. Do we even want to be
-        // able to parse doubles?
-        double dCompare = sCompare.toDouble(&parsed);
-        if (parsed) {
-            // Round it to avoid floating point comparisons
-            int iCompare = (int)dCompare;
-            if (op == "=" ) {
-                return (value == iCompare);
-            } else if (op == "<") {
-                return (value < iCompare);
-            } else if (op == ">") {
-                return (value > iCompare);
-            } else if (op == "<=") {
-                return (value <= iCompare);
-            } else if (op == ">=") {
-                return (value >= iCompare);
-            } else {
-                return false;
-            }
-        }
-        // Fail
-        return false;
-    }
-    QStringList rangeArgs = expression.split("-");
-    if (rangeArgs.length() == 2) {
-        bool ok = false;
-        double arg1 = rangeArgs[0].toDouble(&ok);
-        if (!ok) {
-            return false;
-        }
-        double arg2 = rangeArgs[1].toDouble(&ok);
-        if (!ok) {
-            return false;
-        }
-
-        // Nonsense
-        if (arg1 > arg2) {
-            return false;
-        }
-        return (value >= arg1 && value <= arg2);
-    }
-    return false;
-}
-
-bool BaseTrackCache::trackMatchesNamedString(const TrackPointer& pTrack,
-                                     const QStringList& stringMatchers) const {
-    foreach(QString stringMatcher, stringMatchers)
-    {
-        QString field, expression;
-        if (m_stringFilterMatcher.indexIn(stringMatcher) == -1) {
-            continue;
-        }
-        field = m_stringFilterMatcher.cap(1);
-        expression = m_stringFilterMatcher.cap(2);
-        if (expression == "" ) {
-            return false;
-        }
-        if (field == "artist") {
-            if (! pTrack->getArtist().contains(expression, Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (field == "album") {
-            if (! pTrack->getAlbum().contains(expression, Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (field == "location") {
-            if (! pTrack->getLocation().contains(expression, Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (field == "comment") {
-            if (! pTrack->getComment().contains(expression, Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (field == "title") {
-            if (! pTrack->getTitle().contains(expression, Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (field == "genre") {
-            if (! pTrack->getGenre().contains(expression, Qt::CaseInsensitive)) {
-                return false;
-            }
-        }
-    }
-    return true;
 }
 
 void BaseTrackCache::filterAndSort(const QSet<int>& trackIds,
@@ -547,7 +380,14 @@ void BaseTrackCache::filterAndSort(const QSet<int>& trackIds,
         }
     }
 
-    QString filter = filterClause(searchQuery, extraFilter, idStrings);
+    QScopedPointer<QueryNode> pQuery(parseQuery(
+        searchQuery, extraFilter, idStrings));
+
+    QString filter = pQuery->toSql();
+    if (!filter.isEmpty()) {
+        filter.prepend("WHERE ");
+    }
+
     QString orderBy = orderByClause(sortColumn, sortOrder);
     QString queryString = QString("SELECT %1 FROM %2 %3 %4")
             .arg(m_idColumn, m_tableName, filter, orderBy);
@@ -599,25 +439,6 @@ void BaseTrackCache::filterAndSort(const QSet<int>& trackIds,
         return;
     }
 
-    // Make a regular expression that matches the query terms.
-    QStringList searchTokens = searchQuery.split(" ");
-    QStringList numericMatchers, stringMatchers;
-    // Escape every token to stuff in a positive lookahead regular expression
-    for (int i = 0; i < searchTokens.size(); ++i) {
-        QString escaped = QRegExp::escape(searchTokens[i].trimmed());
-        if (escaped.contains(m_numericFilterMatcher)) {
-            numericMatchers.append(escaped);
-            searchTokens[i] = "";
-        } else if (escaped.contains(m_stringFilterMatcher)) {
-            stringMatchers.append(escaped);
-            searchTokens[i] = "";
-        } else {
-            searchTokens[i] = "(?=.*" + escaped +")";
-        }
-    }
-
-    QRegExp searchMatcher("^"+searchTokens.join(""), Qt::CaseInsensitive);
-
     foreach (int trackId, dirtyTracks) {
         // Only get the track if it is in the cache.
         TrackPointer pTrack = lookupCachedTrack(trackId);
@@ -628,13 +449,8 @@ void BaseTrackCache::filterAndSort(const QSet<int>& trackIds,
 
         // The track should be in the result set if the search is empty or the
         // track matches the search.
-        // TODO(owen): It would be better to parse the numeric matchers once
-        // and run all of the tracks through it instead of redoing that logic
-        // for every dirty track
         bool shouldBeInResultSet = searchQuery.isEmpty() ||
-                (trackMatches(pTrack, searchMatcher) &&
-                trackMatchesNumeric(pTrack, numericMatchers) &&
-                trackMatchesNamedString(pTrack, stringMatchers));
+                pQuery->match(pTrack);
 
         // If the track is in this result set.
         bool isInResultSet = trackToIndex->contains(trackId);
@@ -684,9 +500,8 @@ void BaseTrackCache::filterAndSort(const QSet<int>& trackIds,
     }
 }
 
-
-QString BaseTrackCache::filterClause(QString query, QString extraFilter,
-                                     QStringList idStrings) const {
+QueryNode* BaseTrackCache::parseQuery(QString query, QString extraFilter,
+                                      QStringList idStrings) const {
     QStringList queryFragments;
     if (!extraFilter.isNull() && extraFilter != "") {
         queryFragments << QString("(%1)").arg(extraFilter);
@@ -742,8 +557,14 @@ QString BaseTrackCache::orderByClause(int sortColumn,
     }
     s.append(sort_field);
 
-    s += (sortOrder == Qt::AscendingOrder) ? QLatin1String(" ASC") :
-            QLatin1String(" DESC");
+#ifdef __SQLITE3__
+    if (type == QVariant::String) {
+        s.append(" COLLATE localeAwareCompare");
+    }
+#endif
+
+    s.append((sortOrder == Qt::AscendingOrder) ? QLatin1String(" ASC") :
+            QLatin1String(" DESC"));
     return s;
 }
 
@@ -752,16 +573,18 @@ int BaseTrackCache::findSortInsertionPoint(TrackPointer pTrack,
                                            Qt::SortOrder sortOrder,
                                            const QVector<int> trackIds) const {
     QVariant trackValue;
-    getTrackValueForColumn(pTrack, sortColumn,trackValue);
+    getTrackValueForColumn(pTrack, sortColumn, trackValue);
 
     int min = 0;
-    int max = trackIds.size()-1;
+    int max = trackIds.size() - 1;
 
     if (sDebug) {
         qDebug() << this << "Trying to insertion sort:"
                  << trackValue << "min" << min << "max" << max;
     }
 
+    // If trackIds is empty, min is 0 and max is -1 so findSortInsertionPoint
+    // returns 0.
     while (min <= max) {
         int mid = min + (max - min) / 2;
         int otherTrackId = trackIds[mid];
@@ -798,12 +621,12 @@ int BaseTrackCache::compareColumnValues(int sortColumn, Qt::SortOrder sortOrder,
                                         QVariant val1, QVariant val2) const {
     int result = 0;
 
-    if (sortColumn == fieldIndex(PLAYLISTTRACKSTABLE_POSITION) ||
-        sortColumn == fieldIndex(LIBRARYTABLE_BITRATE) ||
-        sortColumn == fieldIndex(LIBRARYTABLE_BPM) ||
-        sortColumn == fieldIndex(LIBRARYTABLE_DURATION) ||
-        sortColumn == fieldIndex(LIBRARYTABLE_TIMESPLAYED) ||
-        sortColumn == fieldIndex(LIBRARYTABLE_RATING)) {
+    if (sortColumn == fieldIndex(ColumnCache::COLUMN_PLAYLISTTRACKSTABLE_POSITION) ||
+            sortColumn == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BITRATE) ||
+            sortColumn == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BPM) ||
+            sortColumn == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_DURATION) ||
+            sortColumn == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_TIMESPLAYED) ||
+            sortColumn == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_RATING)) {
         // Sort as floats.
         double delta = val1.toDouble() - val2.toDouble();
 

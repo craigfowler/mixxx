@@ -9,6 +9,8 @@
 * show details for a mapping.
 */
 
+#include <QDirIterator>
+
 #include "controllers/controllerpresetinfo.h"
 
 #include "controllers/defs_controllers.h"
@@ -18,7 +20,8 @@ PresetInfo::PresetInfo()
         : m_valid(false) {
 }
 
-PresetInfo::PresetInfo(const QString preset_path) {
+PresetInfo::PresetInfo(const QString preset_path)
+        : m_valid(false) {
     // Parse <info> header section from a controller description XML file
     // Contents parsed by xml path:
     // info.name        Preset name, used for drop down menus in dialogs
@@ -88,7 +91,7 @@ PresetInfo::PresetInfo(const QString preset_path) {
 QHash<QString,QString> PresetInfo::parseBulkProduct(const QDomElement& element) const {
     // <product protocol="bulk" vendor_id="0x06f8" product_id="0x0b105" in_epaddr="0x82" out_epaddr="0x03">
 
-    QHash<QString,QString> product;
+    QHash<QString, QString> product;
     product.insert("protocol", element.attribute("protocol",""));
     product.insert("vendor_id", element.attribute("vendor_id",""));
     product.insert("product_id", element.attribute("product_id",""));
@@ -131,22 +134,25 @@ QHash<QString,QString> PresetInfo::parseOSCProduct(const QDomElement& element) c
     return product;
 }
 
-PresetInfoEnumerator::PresetInfoEnumerator(ConfigObject<ConfigValue> *pConfig)
-        : m_pConfig(pConfig) {
-
-    QString configPath = m_pConfig->getResourcePath();
-    controllerDirPaths.append(configPath.append("controllers/"));
-    QString settingsPath = m_pConfig->getSettingsPath();
-    controllerDirPaths.append(settingsPath.append("presets/"));
+PresetInfoEnumerator::PresetInfoEnumerator(ConfigObject<ConfigValue>* pConfig) {
+    controllerDirPaths.append(localPresetsPath(pConfig));
+    controllerDirPaths.append(resourcePresetsPath(pConfig));
 
     // Static list of supported default extensions, sorted by popularity
-    fileExtensions.append(QString(".midi.xml"));
-    fileExtensions.append(QString(".cntrlr.xml"));
-    fileExtensions.append(QString(".hid.xml"));
-    fileExtensions.append(QString(".bulk.xml"));
-    fileExtensions.append(QString(".osc.xml"));
+    fileExtensions.append(QString(MIDI_PRESET_EXTENSION));
+    fileExtensions.append(QString(HID_PRESET_EXTENSION));
+    fileExtensions.append(QString(BULK_PRESET_EXTENSION));
 
     loadSupportedPresets();
+}
+
+PresetInfoEnumerator::~PresetInfoEnumerator() {
+    for (QMap<QString, ControllerPresetFileHandler*>::iterator it =
+                 m_presetFileHandlersByExtension.begin();
+         it != m_presetFileHandlersByExtension.end(); ++it) {
+        delete it.value();
+        it = m_presetFileHandlersByExtension.erase(it);
+    }
 }
 
 bool PresetInfoEnumerator::isValidExtension(const QString extension) {
@@ -159,18 +165,23 @@ bool PresetInfoEnumerator::hasPresetInfo(const QString extension, const QString 
     // Check if preset info matching extension and preset name can be found
     if (!isValidExtension(extension))
         return false;
-    foreach (QString extension, presetsByExtension.keys()) {
-        QMap <QString,PresetInfo> presets = presetsByExtension[extension];
-        foreach (PresetInfo preset, presets.values())
-            if (name == preset.getName())
+
+    for (QMap<QString, QMap<QString, PresetInfo> >::const_iterator it =
+                 presetsByExtension.begin();
+         it != presetsByExtension.end(); ++it) {
+        for (QMap<QString, PresetInfo>::const_iterator it2 = it.value().begin();
+             it2 != it.value().end(); ++it2) {
+            if (name == it2.value().getName()) {
                 return true;
+            }
+        }
     }
     return false;
 }
 
 bool PresetInfoEnumerator::hasPresetInfo(const QString path) {
     foreach (QString extension, presetsByExtension.keys()) {
-        QMap <QString,PresetInfo> presets = presetsByExtension[extension];
+        QMap<QString, PresetInfo> presets = presetsByExtension[extension];
         if (presets.contains(path))
             return true;
     }
@@ -181,7 +192,7 @@ PresetInfo PresetInfoEnumerator::getPresetInfo(const QString path) {
     // Lookup and return controller script preset info by script path
     // Return NULL if path is not found.
     foreach (QString extension, presetsByExtension.keys()) {
-        QMap <QString,PresetInfo> presets = presetsByExtension[extension];
+        QMap<QString, PresetInfo> presets = presetsByExtension[extension];
         if (presets.contains(path))
             return presets[path];
     }
@@ -191,7 +202,7 @@ PresetInfo PresetInfoEnumerator::getPresetInfo(const QString path) {
 QList<PresetInfo> PresetInfoEnumerator::getPresets(const QString extension) {
     // Return list of PresetInfo items matching extension
     // Returns empty list if no matching extension presets can be found
-    QList <PresetInfo> presets;
+    QList<PresetInfo> presets;
     if (presetsByExtension.contains(extension)) {
         presets = presetsByExtension[extension].values();
         return presetsByExtension[extension].values();
@@ -203,12 +214,11 @@ QList<PresetInfo> PresetInfoEnumerator::getPresets(const QString extension) {
 void PresetInfoEnumerator::addExtension(const QString extension) {
     if (presetsByExtension.contains(extension))
         return;
-    QMap <QString,PresetInfo> presets;
+    QMap<QString,PresetInfo> presets;
     presetsByExtension[extension] = presets;
 }
 
 void PresetInfoEnumerator::loadSupportedPresets() {
-
     foreach (QString dirPath, controllerDirPaths) {
         QDirIterator it(dirPath);
         while (it.hasNext()) {
@@ -226,13 +236,13 @@ void PresetInfoEnumerator::loadSupportedPresets() {
     }
 
     foreach (QString extension, presetsByExtension.keys()) {
-        QMap <QString,PresetInfo> presets = presetsByExtension[extension];
+        QMap<QString,PresetInfo> presets = presetsByExtension[extension];
         qDebug() << "Extension" << extension << "total" << presets.keys().length() << "presets";
     }
 }
 
 void PresetInfoEnumerator::updatePresets(const QString extension) {
-    QMap <QString,PresetInfo> presets;
+    QMap<QString,PresetInfo> presets;
 
     if (presetsByExtension.contains(extension))
         presetsByExtension.remove(extension);

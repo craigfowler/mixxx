@@ -1,25 +1,23 @@
 #include <QDesktopServices>
-#include <QDateTime>
 
+#include "controlobject.h"
+#include "dlgrecording.h"
+#include "library/trackcollection.h"
 #include "widget/wwidget.h"
 #include "widget/wskincolor.h"
 #include "widget/wtracktableview.h"
-#include "controlobject.h"
-#include "controlobjectthreadmain.h"
-#include "library/trackcollection.h"
-
-#include "dlgrecording.h"
-
-
+#include "util/assert.h"
 
 DlgRecording::DlgRecording(QWidget* parent, ConfigObject<ConfigValue>* pConfig,
-                           TrackCollection* pTrackCollection,
+                           Library* pLibrary, TrackCollection* pTrackCollection,
                            RecordingManager* pRecordingManager, MixxxKeyboard* pKeyboard)
         : QWidget(parent),
           m_pConfig(pConfig),
           m_pTrackCollection(pTrackCollection),
           m_browseModel(this, m_pTrackCollection, pRecordingManager),
           m_proxyModel(&m_browseModel),
+          m_bytesRecordedStr("--"),
+          m_durationRecordedStr("--:--"),
           m_pRecordingManager(pRecordingManager) {
     setupUi(this);
     m_pTrackTableView = new WTrackTableView(this, pConfig, m_pTrackCollection, false); // No sorting
@@ -29,17 +27,25 @@ DlgRecording::DlgRecording(QWidget* parent, ConfigObject<ConfigValue>* pConfig,
             this, SIGNAL(loadTrack(TrackPointer)));
     connect(m_pTrackTableView, SIGNAL(loadTrackToPlayer(TrackPointer, QString, bool)),
             this, SIGNAL(loadTrackToPlayer(TrackPointer, QString, bool)));
+    connect(pLibrary, SIGNAL(setTrackTableFont(QFont)),
+            m_pTrackTableView, SLOT(setTrackTableFont(QFont)));
+    connect(pLibrary, SIGNAL(setTrackTableRowHeight(int)),
+            m_pTrackTableView, SLOT(setTrackTableRowHeight(int)));
 
     connect(m_pRecordingManager, SIGNAL(isRecording(bool)),
             this, SLOT(slotRecordingEnabled(bool)));
     connect(m_pRecordingManager, SIGNAL(bytesRecorded(long)),
             this, SLOT(slotBytesRecorded(long)));
+    connect(m_pRecordingManager, SIGNAL(durationRecorded(QString)),
+            this, SLOT(slotDurationRecorded(QString)));
 
     QBoxLayout* box = dynamic_cast<QBoxLayout*>(layout());
-    Q_ASSERT(box); //Assumes the form layout is a QVBox/QHBoxLayout!
-    box->removeWidget(m_pTrackTablePlaceholder);
-    m_pTrackTablePlaceholder->hide();
-    box->insertWidget(1, m_pTrackTableView);
+    DEBUG_ASSERT_AND_HANDLE(box) { //Assumes the form layout is a QVBox/QHBoxLayout!
+    } else {
+        box->removeWidget(m_pTrackTablePlaceholder);
+        m_pTrackTablePlaceholder->hide();
+        box->insertWidget(1, m_pTrackTableView);
+    }
 
     m_recordingDir = m_pRecordingManager->getRecordingDir();
 
@@ -55,7 +61,6 @@ DlgRecording::DlgRecording(QWidget* parent, ConfigObject<ConfigValue>* pConfig,
 }
 
 DlgRecording::~DlgRecording() {
-
 }
 
 void DlgRecording::onShow() {
@@ -100,24 +105,44 @@ void DlgRecording::toggleRecording(bool toggle) {
         m_pRecordingManager->stopRecording();
     }
 }
+
 void DlgRecording::slotRecordingEnabled(bool isRecording) {
-    if(isRecording){
+    if (isRecording) {
         pushButtonRecording->setText((tr("Stop Recording")));
-        //This will update the recorded track table view
-        m_browseModel.setPath(m_recordingDir);
-    }
-    else{
+    } else {
         pushButtonRecording->setText((tr("Start Recording")));
         label->setText("Start recording here ...");
     }
-
+    //This will update the recorded track table view
+    m_browseModel.setPath(m_recordingDir);
 }
-/** int bytes: the number of recorded bytes within a session **/
+
+// gets number of recorded bytes and update label
 void DlgRecording::slotBytesRecorded(long bytes) {
-    double megabytes = bytes / 1048575.0f;
-    QString byteStr = QString::number(megabytes,'f',2);
-    QString text = (tr("Recording to file: ")) +m_pRecordingManager->getRecordingFile();
-    /* TRANSLATOR: The size of the file which has been stored during the current recording in megabytes (MB) */
-    text.append(" ( " +byteStr+ (tr("MB written")) +" )");
+    double megabytes = bytes / 1048576.0;
+    m_bytesRecordedStr = QString::number(megabytes,'f',2);
+    refreshLabel();
+}
+
+// gets recorded duration and update label
+void DlgRecording::slotDurationRecorded(QString durationRecorded) {
+    m_durationRecordedStr = durationRecorded;
+    refreshLabel();
+}
+
+// update label besides start/stop button
+void DlgRecording::refreshLabel() {
+    QString text = tr("Recording to file: %1 (%2 MiB written in %3)")
+              .arg(m_pRecordingManager->getRecordingFile())
+              .arg(m_bytesRecordedStr)
+              .arg(m_durationRecordedStr);
     label->setText(text);
+ }
+
+void DlgRecording::setTrackTableFont(const QFont& font) {
+    m_pTrackTableView->setTrackTableFont(font);
+}
+
+void DlgRecording::setTrackTableRowHeight(int rowHeight) {
+    m_pTrackTableView->setTrackTableRowHeight(rowHeight);
 }

@@ -18,15 +18,16 @@
 #ifndef ENGINEBUFFERSCALE_H
 #define ENGINEBUFFERSCALE_H
 
-#include "defs.h"
 #include <QObject>
+
+#include "util/types.h"
 
 // MAX_SEEK_SPEED needs to be good and high to allow room for the very high
 //  instantaneous velocities of advanced scratching (Uzi) and spin-backs.
 //  (Yes, I can actually spin the SCS.1d faster than 15x nominal.
 //  Why do we even have this parameter? -- Sean)
-#define MAX_SEEK_SPEED 100.0f
-#define MIN_SEEK_SPEED 0.010f
+#define MAX_SEEK_SPEED 100.0
+#define MIN_SEEK_SPEED 0.010
 // I'll hurt you if you change MIN_SEEK_SPEED. SoundTouch freaks out and
 // just gives us stuttering if you set the speed to be lower than this.
 // This took me ages to figure out.
@@ -36,28 +37,51 @@
   *@author Tue & Ken Haste Andersen
   */
 
-class EngineBufferScale : public QObject
-{
-public:
+class EngineBufferScale : public QObject {
+    Q_OBJECT
+  public:
     EngineBufferScale();
     virtual ~EngineBufferScale();
 
-    /** Set base tempo, ie. normal playback speed. */
-    virtual void setBaseRate(double dBaseRate) = 0;
-    /** Set tempo */
-    virtual double setTempo(double dTempo) = 0;
+    // Sets the scaling parameters.
+    // * The desired output sample rate.
+    // * The base rate (ratio of track sample rate to output sample rate).
+    // * The tempoRatio describes the tempo change in fraction of
+    //   original tempo. Put another way, it is the ratio of track seconds to
+    //   real second. For example, a tempo of 1.0 is no change. A
+    //   tempo of 2 is a 2x speedup (2 track seconds pass for every 1
+    //   real second).
+    // * The pitchRatio describes the pitch adjustment in fraction of
+    //   the original pitch. For example, a pitch adjustment of 1.0 is no change and a
+    //   pitch adjustment of 2.0 is a full octave shift up.
+    //
+    // If parameter settings are outside of acceptable limits, each setting will
+    // be set to the value it was clamped to.
+    virtual void setScaleParameters(int iSampleRate,
+                                    double base_rate,
+                                    double* pTempoRatio,
+                                    double* pPitchRatio) {
+        m_iSampleRate = iSampleRate;
+        m_dBaseRate = base_rate;
+        m_dTempo = *pTempoRatio;
+        m_dPitch = *pPitchRatio;
+    }
+
     /** Get new playpos after call to scale() */
     double getSamplesRead();
     /** Called from EngineBuffer when seeking, to ensure the buffers are flushed */
     virtual void clear() = 0;
     /** Scale buffer */
-    virtual CSAMPLE *getScaled(unsigned long buf_size) = 0;
+    virtual CSAMPLE* getScaled(unsigned long buf_size) = 0;
 
-protected:
-    /** Tempo and base rate */
-    double m_dTempo, m_dBaseRate;
+  protected:
+    int m_iSampleRate;
+    double m_dBaseRate;
+    bool m_bSpeedAffectsPitch;
+    double m_dTempo;
+    double m_dPitch;
     /** Pointer to internal buffer */
-    CSAMPLE *m_buffer;
+    CSAMPLE* m_buffer;
     /** New playpos after call to scale */
     double m_samplesRead;
 };

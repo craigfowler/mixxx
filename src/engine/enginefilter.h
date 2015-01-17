@@ -20,28 +20,30 @@
 
 #define MIXXX
 #include "engine/engineobject.h"
-#include "../lib/fidlib-0.9.10/fidlib.h"
-#include "defs.h"
+#include <fidlib.h>
+#include "util/types.h"
 
 #define PREDEF_HP 1
 #define PREDEF_BP 2
 #define PREDEF_LP 3
 
-class EngineFilter : public EngineObject
-{
-public:
-    EngineFilter( char *conf, int predefinedType = 0);
-    ~EngineFilter();
-    void process(const CSAMPLE *pIn, const CSAMPLE *ppOut, const int iBufferSize);
-protected:
-    const double *coefs;
+class EngineFilter : public EngineObject {
+    Q_OBJECT
+  public:
+    EngineFilter(char* conf, int predefinedType = 0);
+    virtual ~EngineFilter();
+
+    void process(CSAMPLE* pInOut, const int iBufferSize);
+
+  protected:
     double iir;
     double fir;
     double tmp;
 #define FILTER_BUF_SIZE 16
     double buf1[FILTER_BUF_SIZE];
-	double buf2[FILTER_BUF_SIZE];
-private:
+    double buf2[FILTER_BUF_SIZE];
+
+  private:
     double (*processSample)(void *buf, const double sample);
 
     FidFilter *ff;

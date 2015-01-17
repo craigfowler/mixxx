@@ -1,22 +1,23 @@
 #include <set>
-#include <QDebug>
+#include <QtDebug>
 
 #include "waveformmarkset.h"
 #include "engine/cuecontrol.h"
 #include "controlobject.h"
-#include "controlobjectthreadmain.h"
 
 WaveformMarkSet::WaveformMarkSet() {
 }
 
+WaveformMarkSet::~WaveformMarkSet() {
+    clear();
+}
+
 void WaveformMarkSet::setup(const QString& group, const QDomNode& node,
-        const WaveformSignalColors& signalColors) {
+                            const SkinContext& context,
+                            const WaveformSignalColors& signalColors) {
 
-    m_defaultMark = WaveformMark();
-    m_marks.clear();
+    clear();
 
-    m_defaultMark = WaveformMark();
-    m_marks.clear();
 #if QT_VERSION >= 0x040700
     m_marks.reserve(NUM_HOT_CUES);
 #endif
@@ -27,12 +28,12 @@ void WaveformMarkSet::setup(const QString& group, const QDomNode& node,
     QDomNode child = node.firstChild();
     while (!child.isNull()) {
         if (child.nodeName() == "DefaultMark") {
-            m_defaultMark.setup(group, child, signalColors);
+            m_defaultMark.setup(group, child, context, signalColors);
             hasDefaultMark = true;
         } else if (child.nodeName() == "Mark") {
             m_marks.push_back(WaveformMark());
             WaveformMark& mark = m_marks.back();
-            mark.setup(group, child, signalColors);
+            mark.setup(group, child, context, signalColors);
 
             if (mark.m_pointControl) {
                 // guarantee uniqueness even if there is a misdesigned skin
@@ -46,8 +47,8 @@ void WaveformMarkSet::setup(const QString& group, const QDomNode& node,
         child = child.nextSibling();
     }
 
-    //check if there is a default mark and compare declared
-    //and to create all missing hot_cues
+    // check if there is a default mark and compare declared
+    // and to create all missing hot_cues
     if (hasDefaultMark) {
         for (int i = 1; i < NUM_HOT_CUES; ++i) {
             QString hotCueControlItem = "hotcue_" + QString::number(i) + "_position";
@@ -61,9 +62,13 @@ void WaveformMarkSet::setup(const QString& group, const QDomNode& node,
                 //qDebug() << "WaveformRenderMark::setup - Automatic mark" << hotCueControlItem;
                 m_marks.push_back(m_defaultMark);
                 WaveformMark& mark = m_marks.back();
-                mark.m_pointControl = new ControlObjectThreadMain(pHotcue->getKey());
-                mark.m_text = mark.m_text.arg(i);
+                mark.setKeyAndIndex(pHotcue->getKey(), i);
             }
         }
     }
+}
+
+void WaveformMarkSet::clear() {
+    m_defaultMark = WaveformMark();
+    m_marks.clear();
 }

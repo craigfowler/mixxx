@@ -6,6 +6,8 @@
 #include "controlobjectthread.h"
 
 class ControlObject;
+class ControlPushButton;
+class Library;
 class WLibrary;
 class WLibrarySidebar;
 class MixxxKeyboard;
@@ -32,7 +34,7 @@ class LoadToGroupController : public QObject {
 class LibraryControl : public QObject {
     Q_OBJECT
   public:
-    LibraryControl(QObject* pParent=NULL);
+    LibraryControl(Library* pLibrary);
     virtual ~LibraryControl();
 
     void bindWidget(WLibrary* pLibrary, MixxxKeyboard* pKeyboard);
@@ -44,24 +46,40 @@ class LibraryControl : public QObject {
     void slotLoadSelectedTrackToGroup(QString group, bool play);
     void slotSelectNextTrack(double v);
     void slotSelectPrevTrack(double v);
+    void slotSelectTrack(double v);
+    void slotSelectSidebarItem(double v);
     void slotSelectNextSidebarItem(double v);
     void slotSelectPrevSidebarItem(double v);
     void slotToggleSelectedSidebarItem(double v);
     void slotLoadSelectedIntoFirstStopped(double v);
-    void slotSelectTrackKnob(double v);
+
     void maybeCreateGroupController(const QString& group);
     void slotNumDecksChanged(double v);
     void slotNumSamplersChanged(double v);
     void slotNumPreviewDecksChanged(double v);
 
+    void slotFontSize(double v);
+    void slotIncrementFontSize(double v);
+    void slotDecrementFontSize(double v);
+
   private:
+    Library* m_pLibrary;
+
     ControlObject* m_pSelectNextTrack;
     ControlObject* m_pSelectPrevTrack;
-    ControlObject* m_pSelectNextPlaylist;
-    ControlObject* m_pSelectPrevPlaylist;
+    ControlObject* m_pSelectTrack;
+
+    ControlObject* m_pSelectSidebarItem;
+    ControlObject* m_pSelectPrevSidebarItem;
+    ControlObject* m_pSelectNextSidebarItem;
+
     ControlObject* m_pToggleSidebarItem;
     ControlObject* m_pLoadSelectedIntoFirstStopped;
-    ControlObject* m_pSelectTrackKnob;
+
+    ControlObject* m_pFontSizeKnob;
+    ControlPushButton* m_pFontSizeIncrement;
+    ControlPushButton* m_pFontSizeDecrement;
+
     WLibrary* m_pLibraryWidget;
     WLibrarySidebar* m_pSidebarWidget;
     ControlObjectThread m_numDecks;

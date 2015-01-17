@@ -10,10 +10,9 @@
 // Copyright: See COPYING file that comes with this distribution
 //
 //
-#include "parser.h"
-#include "parserpls.h"
-#include <QDebug>
-#include <QTextStream>
+#include "library/parserpls.h"
+
+#include <QtDebug>
 #include <QMessageBox>
 #include <QDir>
 #include <QFile>
@@ -45,7 +44,7 @@ QList<QString> ParserPls::parse(QString sFilename)
 
     clearLocations();
 
-    if (file.open(QIODevice::ReadOnly) && !isBinary(sFilename) ) {
+    if (file.open(QIODevice::ReadOnly) && !isBinary(sFilename)) {
 
         /* Unfortunately, QT 4.7 does not handle <CR> (=\r or asci value 13) line breaks.
          * This is important on OS X where iTunes, e.g., exports M3U playlists using <CR>
@@ -61,7 +60,7 @@ QList<QString> ParserPls::parse(QString sFilename)
         bool isCR_encoded = ba.contains("\r");
         if(isCR_encoded && !isCRLF_encoded)
             ba.replace('\r','\n');
-        QTextStream textstream(ba.data());
+        QTextStream textstream(ba.constData());
 
         while(!textstream.atEnd()) {
             QString psLine = getFilepath(&textstream, basepath);
@@ -91,10 +90,10 @@ long ParserPls::getNumEntries(QTextStream *stream)
     QString textline;
     textline = stream->readLine();
 
-    if(textline.contains("[playlist]")){
-
-        while(!textline.contains("NumberOfEntries"))
+    if (textline.contains("[playlist]")) {
+        while (!textline.contains("NumberOfEntries")) {
             textline = stream->readLine();
+        }
 
         QString temp = textline.section("=",-1,-1);
 
@@ -112,18 +111,19 @@ QString ParserPls::getFilepath(QTextStream *stream, QString basepath)
 {
     QString textline,filename = "";
     textline = stream->readLine();
-    while(!textline.isEmpty()){
-        if(textline.isNull())
+    while (!textline.isEmpty()) {
+        if (textline.isNull()) {
             break;
+        }
 
         if(textline.contains("File")) {
             int iPos = textline.indexOf("=",0);
             ++iPos;
 
             filename = textline.right(textline.length()-iPos);
-           
+
             //Rythmbox playlists starts with file://<path>
-            //We remove the file protocol if found. 
+            //We remove the file protocol if found.
             filename.remove("file://");
             QByteArray strlocbytes = filename.toUtf8();
             QUrl location = QUrl::fromEncoded(strlocbytes);
@@ -148,10 +148,10 @@ QString ParserPls::getFilepath(QTextStream *stream, QString basepath)
     return 0;
 
 }
-bool ParserPls::writePLSFile(QString &file_str, QList<QString> &items, bool useRelativePath)
+bool ParserPls::writePLSFile(const QString &file_str, QList<QString> &items, bool useRelativePath)
 {
     QFile file(file_str);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)){
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QMessageBox::warning(NULL,tr("Playlist Export Failed"),
                              tr("Could not create file")+" "+file_str);
         return false;
@@ -163,15 +163,15 @@ bool ParserPls::writePLSFile(QString &file_str, QList<QString> &items, bool useR
     QTextStream out(&file);
     out << "[playlist]\n";
     out << "NumberOfEntries=" << items.size() << "\n";
-    for(int i =0; i < items.size(); ++i){
+    for (int i = 0; i < items.size(); ++i) {
         //Write relative path if possible
-        if(useRelativePath){
+        if (useRelativePath) {
             //QDir::relativePath() will return the absolutePath if it cannot compute the
             //relative Path
             out << "File" << i << "=" << base_dir.relativeFilePath(items.at(i)) << "\n";
-        }
-        else
+        } else {
             out << "File" << i << "=" << items.at(i) << "\n";
+        }
     }
 
     return true;

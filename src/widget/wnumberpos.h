@@ -3,14 +3,11 @@
 #ifndef WNUMBERPOS_H
 #define WNUMBERPOS_H
 
+#include <QMouseEvent>
+
 #include "wnumber.h"
 
-class ControlObjectThreadWidget;
-class ControlObjectThreadMain;
-
-/**
-@author Tue Haste Andersen
-*/
+class ControlObjectThread;
 
 class WNumberPos : public WNumber {
     Q_OBJECT
@@ -18,31 +15,31 @@ class WNumberPos : public WNumber {
     WNumberPos(const char *group, QWidget *parent=0);
     virtual ~WNumberPos();
 
-    void setValue(double dValue);
-    /** Set if the display shows remaining time (true) or position (false) */
+    // Set if the display shows remaining time (true) or position (false)
     void setRemain(bool bRemain);
 
   protected:
     void mousePressEvent(QMouseEvent* pEvent);
 
   private slots:
+    void setValue(double dValue);
     void slotSetValue(double);
     void slotSetRemain(double dRemain);
     void slotSetTrackSampleRate(double dSampleRate);
     void slotSetTrackSamples(double dSamples);
 
   private:
-    /** Old value set */
+    // Old value set
     double m_dOldValue;
     double m_dTrackSamples;
     double m_dTrackSampleRate;
-    /** True if remaining content is being shown */
+    // True if remaining content is being shown
     bool m_bRemain;
-    ControlObjectThreadMain* m_pShowTrackTimeRemaining;
+    ControlObjectThread* m_pShowTrackTimeRemaining;
     // Pointer to control object for position, rate, and track info
-    ControlObjectThreadMain* m_pVisualPlaypos;
-    ControlObjectThreadWidget* m_pTrackSamples;
-    ControlObjectThreadWidget* m_pTrackSampleRate;
+    ControlObjectThread* m_pVisualPlaypos;
+    ControlObjectThread* m_pTrackSamples;
+    ControlObjectThread* m_pTrackSampleRate;
 };
 
 #endif

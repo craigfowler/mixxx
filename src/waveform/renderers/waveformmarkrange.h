@@ -3,13 +3,16 @@
 
 #include <QImage>
 
-class ControlObjectThreadMain;
+#include "skin/skincontext.h"
+
+class ControlObjectThread;
 class QDomNode;
 class WaveformSignalColors;
 
 class WaveformMarkRange {
   public:
     WaveformMarkRange();
+    ~WaveformMarkRange();
 
     // If a mark range is active it has valid start/end points so it should be
     // drawn on waveforms.
@@ -23,14 +26,15 @@ class WaveformMarkRange {
     double end();
 
     void setup(const QString &group, const QDomNode& node,
-            const WaveformSignalColors& signalColors);
+               const SkinContext& context,
+               const WaveformSignalColors& signalColors);
 
   private:
     void generateImage(int weidth, int height);
 
-    ControlObjectThreadMain* m_markStartPointControl;
-    ControlObjectThreadMain* m_markEndPointControl;
-    ControlObjectThreadMain* m_markEnabledControl;
+    ControlObjectThread* m_markStartPointControl;
+    ControlObjectThread* m_markEndPointControl;
+    ControlObjectThread* m_markEnabledControl;
 
     QColor m_activeColor;
     QColor m_disabledColor;

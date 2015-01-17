@@ -19,25 +19,32 @@
 
 #include "soundsource.h"
 #include <stdio.h>
+#ifdef Q_OS_WIN
+//Enable unicode in libsndfile on Windows
+//(sf_open uses UTF-8 otherwise)
+#include <windows.h>
+#define ENABLE_SNDFILE_WINDOWS_PROTOTYPES 1
+#endif
 #include <sndfile.h>
+
 
 class SoundSourceSndFile : public Mixxx::SoundSource
 {
 public:
-    SoundSourceSndFile(QString qFilename);
+    explicit SoundSourceSndFile(QString qFilename);
     ~SoundSourceSndFile();
-    int open();
+    Result open();
     long seek(long);
     unsigned read(unsigned long size, const SAMPLE*);
     inline long unsigned length();
-    int parseHeader();
+    Result parseHeader();
+    QImage parseCoverArt();
     static QList<QString> supportedFileExtensions();
 
 private:
-    bool m_bOpened;
-    int channels;
     SNDFILE *fh;
-    SF_INFO *info;
+    SF_INFO info;
+    int channels;
     unsigned long filelength;
 };
 

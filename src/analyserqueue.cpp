@@ -1,3 +1,5 @@
+#include <typeinfo>
+
 #include <QtDebug>
 #include <QMutexLocker>
 
@@ -6,33 +8,59 @@
 #include "analyserqueue.h"
 #include "soundsourceproxy.h"
 #include "playerinfo.h"
+#include "sampleutil.h"
 #include "util/timer.h"
 #include "library/trackcollection.h"
 #include "analyserwaveform.h"
 #include "analyserrg.h"
 #include "analyserbeats.h"
+#include "analyserkey.h"
 #include "vamp/vampanalyser.h"
+#include "util/compatibility.h"
+#include "util/event.h"
+#include "util/trace.h"
 
-#include <typeinfo>
+// Measured in 0.1%,
+// 0 for no progress during finalize
+// 1 to display the text "finalizing"
+// 100 for 10% step after finalize
+#define FINALIZE_PERCENT 1
 
-#define FINALIZE_PERCENT 1 // in 0.1%,
-                           // 0 for no progress during finalize
-                           // 1 to display the text "finalizing"
-                           // 100 for 10% step after finalize
+// We need to use a smaller block size becuase on Linux, the AnalyserQueue
+// can starve the CPU of its resources, resulting in xruns.. A block size of
+// 8192 seems to do fine.
+const int kAnalysisBlockSize = 8192;
 
-
-AnalyserQueue::AnalyserQueue(TrackCollection* pTrackCollection) :
-        m_aq(),
-        m_exit(false),
-        m_aiCheckPriorities(false),
-        m_tioq(),
-        m_qm(),
-        m_qwait(),
-        m_queue_size(0) {
+AnalyserQueue::AnalyserQueue(TrackCollection* pTrackCollection)
+        : m_aq(),
+          m_exit(false),
+          m_aiCheckPriorities(false),
+          m_pSamplesPCM(new SAMPLE[kAnalysisBlockSize]),
+          m_pSamples(new CSAMPLE[kAnalysisBlockSize]),
+          m_tioq(),
+          m_qm(),
+          m_qwait(),
+          m_queue_size(0) {
+    Q_UNUSED(pTrackCollection);
     connect(this, SIGNAL(updateProgress()),
             this, SLOT(slotUpdateProgress()));
-    connect(this, SIGNAL(trackDone(TrackPointer)),
-            &pTrackCollection->getTrackDAO(), SLOT(saveTrack(TrackPointer)));
+}
+
+AnalyserQueue::~AnalyserQueue() {
+    stop();
+    m_progressInfo.sema.release();
+    wait(); //Wait until thread has actually stopped before proceeding.
+
+    QListIterator<Analyser*> it(m_aq);
+    while (it.hasNext()) {
+        Analyser* an = it.next();
+        //qDebug() << "AnalyserQueue: deleting " << typeid(an).name();
+        delete an;
+    }
+    //qDebug() << "AnalyserQueue::~AnalyserQueue()";
+
+    delete [] m_pSamplesPCM;
+    delete [] m_pSamples;
 }
 
 void AnalyserQueue::addAnalyser(Analyser* an) {
@@ -43,7 +71,7 @@ void AnalyserQueue::addAnalyser(Analyser* an) {
 bool AnalyserQueue::isLoadedTrackWaiting(TrackPointer tio) {
     QMutexLocker queueLocker(&m_qm);
 
-    const PlayerInfo& info = PlayerInfo::Instance();
+    const PlayerInfo& info = PlayerInfo::instance();
     TrackPointer pTrack;
     bool trackWaiting = false;
     QMutableListIterator<TrackPointer> it(m_tioq);
@@ -89,7 +117,9 @@ bool AnalyserQueue::isLoadedTrackWaiting(TrackPointer tio) {
 TrackPointer AnalyserQueue::dequeueNextBlocking() {
     m_qm.lock();
     if (m_tioq.isEmpty()) {
+        Event::end("AnalyserQueue process");
         m_qwait.wait(&m_qm);
+        Event::start("AnalyserQueue process");
 
         if (m_exit) {
             m_qm.unlock();
@@ -97,7 +127,7 @@ TrackPointer AnalyserQueue::dequeueNextBlocking() {
         }
     }
 
-    const PlayerInfo& info = PlayerInfo::Instance();
+    const PlayerInfo& info = PlayerInfo::instance();
     TrackPointer pLoadTrack;
     QMutableListIterator<TrackPointer> it(m_tioq);
     while (it.hasNext()) {
@@ -129,18 +159,10 @@ TrackPointer AnalyserQueue::dequeueNextBlocking() {
 }
 
 // This is called from the AnalyserQueue thread
-bool AnalyserQueue::doAnalysis(TrackPointer tio, SoundSourceProxy* pSoundSource) {
-    // We need to use a smaller block size becuase on Linux, the AnalyserQueue
-    // can starve the CPU of its resources, resulting in xruns.. A block size of
-    // 8192 seems to do fine.
-    const int ANALYSISBLOCKSIZE = 8192;
-
+bool AnalyserQueue::doAnalysis(TrackPointer tio, const Mixxx::SoundSourcePointer& pSoundSource) {
     int totalSamples = pSoundSource->length();
     //qDebug() << tio->getFilename() << " has " << totalSamples << " samples.";
     int processedSamples = 0;
-
-    SAMPLE* data16 = new SAMPLE[ANALYSISBLOCKSIZE];
-    CSAMPLE* samples = new CSAMPLE[ANALYSISBLOCKSIZE];
 
     QTime progressUpdateInhibitTimer;
     progressUpdateInhibitTimer.start(); // Inhibit Updates for 60 milliseconds
@@ -152,11 +174,11 @@ bool AnalyserQueue::doAnalysis(TrackPointer tio, SoundSourceProxy* pSoundSource)
 
     do {
         ScopedTimer t("AnalyserQueue::doAnalysis block");
-        read = pSoundSource->read(ANALYSISBLOCKSIZE, data16);
+        read = pSoundSource->read(kAnalysisBlockSize, m_pSamplesPCM);
 
         // To compare apples to apples, let's only look at blocks that are the
         // full block size.
-        if (read != ANALYSISBLOCKSIZE) {
+        if (read != kAnalysisBlockSize) {
             t.cancel();
         }
 
@@ -175,16 +197,14 @@ bool AnalyserQueue::doAnalysis(TrackPointer tio, SoundSourceProxy* pSoundSource)
             dieflag = true;
         }
 
-        for (int i = 0; i < read; ++i) {
-            samples[i] = ((float)data16[i])/32767.0f;
-        }
+        SampleUtil::convertS16ToFloat32(m_pSamples, m_pSamplesPCM, read);
 
         QListIterator<Analyser*> it(m_aq);
 
         while (it.hasNext()) {
             Analyser* an =  it.next();
             //qDebug() << typeid(*an).name() << ".process()";
-            an->process(samples, read);
+            an->process(m_pSamples, read);
             //qDebug() << "Done " << typeid(*an).name() << ".process()";
         }
 
@@ -212,7 +232,7 @@ bool AnalyserQueue::doAnalysis(TrackPointer tio, SoundSourceProxy* pSoundSource)
         //QThread::usleep(10);
 
         //has something new entered the queue?
-        if (m_aiCheckPriorities) {
+        if (load_atomic(m_aiCheckPriorities)) {
             m_aiCheckPriorities = false;
             if (isLoadedTrackWaiting(tio)) {
                 qDebug() << "Interrupting analysis to give preference to a loaded track.";
@@ -230,10 +250,7 @@ bool AnalyserQueue::doAnalysis(TrackPointer tio, SoundSourceProxy* pSoundSource)
         if (dieflag || cancelled) {
             t.cancel();
         }
-    } while(read == ANALYSISBLOCKSIZE && !dieflag);
-
-    delete[] data16;
-    delete[] samples;
+    } while(read == kAnalysisBlockSize && !dieflag);
 
     return !cancelled; //don't return !dieflag or we might reanalyze over and over
 }
@@ -270,17 +287,30 @@ void AnalyserQueue::run() {
         // Could happen if the track was queued but then deleted.
         // Or if dequeueNextBlocking is unblocked by exit == true
         if (!nextTrack) {
+            m_qm.lock();
+            m_queue_size = m_tioq.size();
+            m_qm.unlock();
+            if (m_queue_size == 0) {
+                emit(queueEmpty()); // emit asynchrony for no deadlock
+            }
             continue;
         }
 
+        Trace trace("AnalyserQueue analyzing track");
+
         // Get the audio
-        SoundSourceProxy* pSoundSource = new SoundSourceProxy(nextTrack);
-        pSoundSource->open(); //Open the file for reading
+        SoundSourceProxy soundSourceProxy(nextTrack);
+        Mixxx::SoundSourcePointer pSoundSource(soundSourceProxy.open());
+        if (pSoundSource.isNull()) {
+            qWarning() << "Failed to open file for analyzing:" << nextTrack->getLocation();
+            continue;
+        }
+
         int iNumSamples = pSoundSource->length();
         int iSampleRate = pSoundSource->getSampleRate();
 
         if (iNumSamples == 0 || iSampleRate == 0) {
-            qDebug() << "Skipping invalid file:" << nextTrack->getLocation();
+            qWarning() << "Skipping invalid file:" << nextTrack->getLocation();
             continue;
         }
 
@@ -324,8 +354,6 @@ void AnalyserQueue::run() {
             qDebug() << "Skipping track analysis because no analyzer initialized.";
         }
 
-        delete pSoundSource;
-
         m_qm.lock();
         m_queue_size = m_tioq.size();
         m_qm.unlock();
@@ -338,12 +366,12 @@ void AnalyserQueue::run() {
 
 // This is called from the AnalyserQueue thread
 void AnalyserQueue::emitUpdateProgress(TrackPointer tio, int progress) {
-    if (!m_exit) {    
+    if (!m_exit) {
         // First tryAcqire will have always success because sema is initialized with on
         // The following tries will success if the previous signal was processed in the GUI Thread
         // This prevent the AnalysisQueue from filling up the GUI Thread event Queue
         // 100 % is emitted in any case
-        if (progress < 1000 - FINALIZE_PERCENT && progress > 0 ) {
+        if (progress < 1000 - FINALIZE_PERCENT && progress > 0) {
             // Signals during processing are not required in any case
             if (!m_progressInfo.sema.tryAcquire()) {
                return;
@@ -389,44 +417,29 @@ void AnalyserQueue::queueAnalyseTrack(TrackPointer tio) {
 
 // static
 AnalyserQueue* AnalyserQueue::createDefaultAnalyserQueue(
-        ConfigObject<ConfigValue>* _config, TrackCollection* pTrackCollection) {
+        ConfigObject<ConfigValue>* pConfig, TrackCollection* pTrackCollection) {
     AnalyserQueue* ret = new AnalyserQueue(pTrackCollection);
 
-    ret->addAnalyser(new AnalyserWaveform(_config));
-    ret->addAnalyser(new AnalyserGain(_config));
+    ret->addAnalyser(new AnalyserWaveform(pConfig));
+    ret->addAnalyser(new AnalyserGain(pConfig));
     VampAnalyser::initializePluginPaths();
-    ret->addAnalyser(new AnalyserBeats(_config));
-    //ret->addAnalyser(new AnalyserVampKeyTest(_config));
+    ret->addAnalyser(new AnalyserBeats(pConfig));
+    ret->addAnalyser(new AnalyserKey(pConfig));
 
-    ret->start(QThread::IdlePriority);
+    ret->start(QThread::LowPriority);
     return ret;
 }
 
 // static
 AnalyserQueue* AnalyserQueue::createAnalysisFeatureAnalyserQueue(
-        ConfigObject<ConfigValue>* _config, TrackCollection* pTrackCollection) {
+        ConfigObject<ConfigValue>* pConfig, TrackCollection* pTrackCollection) {
     AnalyserQueue* ret = new AnalyserQueue(pTrackCollection);
 
-    ret->addAnalyser(new AnalyserWaveform(_config));
-    ret->addAnalyser(new AnalyserGain(_config));
+    ret->addAnalyser(new AnalyserGain(pConfig));
     VampAnalyser::initializePluginPaths();
-    ret->addAnalyser(new AnalyserBeats(_config));
-    //ret->addAnalyser(new AnalyserVampKeyTest(_config));
+    ret->addAnalyser(new AnalyserBeats(pConfig));
+    ret->addAnalyser(new AnalyserKey(pConfig));
 
-    ret->start(QThread::IdlePriority);
+    ret->start(QThread::LowPriority);
     return ret;
-}
-
-AnalyserQueue::~AnalyserQueue() {
-    stop();
-    m_progressInfo.sema.release();
-    wait(); //Wait until thread has actually stopped before proceeding.
-
-    QListIterator<Analyser*> it(m_aq);
-    while (it.hasNext()) {
-        Analyser* an = it.next();
-        //qDebug() << "AnalyserQueue: deleting " << typeid(an).name();
-        delete an;
-    }
-    //qDebug() << "AnalyserQueue::~AnalyserQueue()";
 }

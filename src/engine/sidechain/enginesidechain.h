@@ -17,17 +17,20 @@
 #ifndef ENGINESIDECHAIN_H
 #define ENGINESIDECHAIN_H
 
-#include <QtCore>
+#include <QThread>
+#include <QMutex>
+#include <QWaitCondition>
+#include <QList>
 
 #include "configobject.h"
-#include "defs.h"
 #include "engine/sidechain/sidechainworker.h"
 #include "util/fifo.h"
+#include "util/types.h"
 
 class EngineSideChain : public QThread {
     Q_OBJECT
   public:
-    EngineSideChain(ConfigObject<ConfigValue> * pConfig);
+    EngineSideChain(ConfigObject<ConfigValue>* pConfig);
     virtual ~EngineSideChain();
 
     // Not thread-safe, wait-free. Submit buffer of samples to the sidechain for

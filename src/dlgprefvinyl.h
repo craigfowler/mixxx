@@ -18,50 +18,56 @@
 #ifndef DLGPREFVINYL_H
 #define DLGPREFVINYL_H
 
+#include <QWidget>
+
 #include "ui_dlgprefvinyldlg.h"
 #include "configobject.h"
 #include "vinylcontrol/vinylcontrolsignalwidget.h"
-#include "controlobjectthreadmain.h"
+#include "preferences/dlgpreferencepage.h"
 
-class QWidget;
-class PlayerProxy;
-class ControlObject;
-class ControlObjectThreadMain;
+class ControlObjectSlave;
 class VinylControlManager;
 
-/**
-  *@author Stefan Langhammer
-  *@author Albert Santoni
-  */
-
-class DlgPrefVinyl : public QWidget, Ui::DlgPrefVinylDlg  {
+class DlgPrefVinyl : public DlgPreferencePage, Ui::DlgPrefVinylDlg  {
     Q_OBJECT
-public:
-    DlgPrefVinyl(QWidget *pParent, VinylControlManager *m_pVCMan, ConfigObject<ConfigValue> *_config);
-    ~DlgPrefVinyl();
+  public:
+    DlgPrefVinyl(QWidget* pParent, VinylControlManager* m_pVCMan, ConfigObject<ConfigValue>* _config);
+    virtual ~DlgPrefVinyl();
 
-public slots:
-    /** Update widget */
+  public slots:
     void slotUpdate();
     void slotApply();
+    void slotResetToDefaults();
+
+    void slotHide();
+    void slotShow();
     void VinylTypeSlotApply();
     void VinylGainSlotApply();
-    void slotClose();
-    void slotShow();
 
-signals:
-private:
-    VinylControlSignalWidget m_signalWidget1;
-    VinylControlSignalWidget m_signalWidget2;
+  private slots:
+    void slotNumDecksChanged(double);
+    void slotVinylType1Changed(QString);
+    void slotVinylType2Changed(QString);
+    void slotVinylType3Changed(QString);
+    void slotVinylType4Changed(QString);
+
+  private:
+    void setDeckWidgetsVisible(int deck, bool visible);
+    void setDeck1WidgetsVisible(bool visible);
+    void setDeck2WidgetsVisible(bool visible);
+    void setDeck3WidgetsVisible(bool visible);
+    void setDeck4WidgetsVisible(bool visible);
+    void verifyAndSaveLeadInTime(QLineEdit* widget, QString group, QString vinyl_type);
+    int getDefaultLeadIn(QString vinyl_type) const;
 
 
-    /** Pointer to player device */
-    //PlayerProxy *player;
+    QList<VinylControlSignalWidget*> m_signalWidgets;
+
     VinylControlManager* m_pVCManager;
-    /** Pointer to config object */
-    ConfigObject<ConfigValue> *config;
-    ControlObjectThreadMain m_COSpeed1;
-    ControlObjectThreadMain m_COSpeed2;
+    ConfigObject<ConfigValue>* config;
+    QList<ControlObjectSlave*> m_COSpeeds;
+    ControlObjectSlave* m_pNumDecks;
+    int m_iConfiguredDecks;
 };
 
 #endif

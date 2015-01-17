@@ -20,7 +20,6 @@
 
 #include <QtSql>
 #include <QList>
-#include <QRegExp>
 #include <QSharedPointer>
 #include <QSqlDatabase>
 
@@ -31,6 +30,13 @@
 #include "library/dao/cuedao.h"
 #include "library/dao/playlistdao.h"
 #include "library/dao/analysisdao.h"
+#include "library/dao/directorydao.h"
+#include "library/dao/libraryhashdao.h"
+
+#ifdef __SQLITE3__
+typedef struct sqlite3_context sqlite3_context;
+typedef struct Mem sqlite3_value;
+#endif
 
 class TrackInfoObject;
 
@@ -41,17 +47,14 @@ class BpmDetector;
 /**
    @author Albert Santoni
 */
-class TrackCollection : public QObject
-{
+class TrackCollection : public QObject {
     Q_OBJECT
   public:
-    TrackCollection(ConfigObject<ConfigValue>* pConfig);
-    ~TrackCollection();
-    bool checkForTables();
+    static const int kRequiredSchemaVersion;
 
-    /** Import the files in a given diretory, without recursing into subdirectories */
-    bool importDirectory(const QString &directory, TrackDAO &trackDao,
-                         const QStringList & nameFilters, volatile bool* cancel);
+    TrackCollection(ConfigObject<ConfigValue>* pConfig);
+    virtual ~TrackCollection();
+    bool checkForTables();
 
     void resetLibaryCancellation();
     QSqlDatabase& getDatabase();
@@ -59,29 +62,48 @@ class TrackCollection : public QObject
     CrateDAO& getCrateDAO();
     TrackDAO& getTrackDAO();
     PlaylistDAO& getPlaylistDAO();
-    QSharedPointer<BaseTrackCache> getTrackSource(const QString& name);
-    void addTrackSource(const QString& name, QSharedPointer<BaseTrackCache> trackSource);
+    DirectoryDAO& getDirectoryDAO();
+    QSharedPointer<BaseTrackCache> getTrackSource();
+    void setTrackSource(QSharedPointer<BaseTrackCache> trackSource);
     void cancelLibraryScan();
 
     ConfigObject<ConfigValue>* getConfig() {
         return m_pConfig;
     }
 
-  signals:
-    void startedLoading();
-    void progressLoading(QString path);
-    void finishedLoading();
+  protected:
+#ifdef __SQLITE3__
+    void installSorting(QSqlDatabase &db);
+    static int sqliteLocaleAwareCompare(void* pArg,
+                                        int len1, const void* data1,
+                                        int len2, const void* data2);
+    static void sqliteLike(sqlite3_context *p,
+                          int aArgc,
+                          sqlite3_value **aArgv);
+    static void makeLatinLow(QChar* c, int count);
+    static int likeCompareLatinLow(
+            QString* pattern,
+            QString* string,
+            const QChar esc);
+    static int likeCompareInner(
+            const QChar* pattern,
+            int patterenSize,
+            const QChar* string,
+            int stringSize,
+            const QChar esc);
+#endif // __SQLITE3__
 
   private:
     ConfigObject<ConfigValue>* m_pConfig;
     QSqlDatabase m_db;
-    QHash<QString, QSharedPointer<BaseTrackCache> > m_trackSources;
+    QSharedPointer<BaseTrackCache> m_defaultTrackSource;
     PlaylistDAO m_playlistDao;
     CrateDAO m_crateDao;
     CueDAO m_cueDao;
+    DirectoryDAO m_directoryDao;
     AnalysisDao m_analysisDao;
+    LibraryHashDAO m_libraryHashDao;
     TrackDAO m_trackDao;
-    const QRegExp m_supportedFileExtensionsRegex;
 };
 
-#endif
+#endif // TRACKCOLLECTION_H

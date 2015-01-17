@@ -15,22 +15,24 @@
 *                                                                         *
 ***************************************************************************/
 
-#include <QtCore>
+#include <QtDebug>
+
 #include "engine/enginebufferscalelinear.h"
-#include "mathstuff.h"
 #include "sampleutil.h"
+#include "track/keyutils.h"
+#include "util/math.h"
+#include "util/assert.h"
 
-EngineBufferScaleLinear::EngineBufferScaleLinear(ReadAheadManager *pReadAheadManager) :
-    EngineBufferScale(),
-    m_pReadAheadManager(pReadAheadManager)
+EngineBufferScaleLinear::EngineBufferScaleLinear(ReadAheadManager *pReadAheadManager)
+    : EngineBufferScale(),
+      m_bBackwards(false),
+      m_bClear(false),
+      m_dRate(1.0),
+      m_dOldRate(1.0),
+      m_pReadAheadManager(pReadAheadManager),
+      m_dCurSampleIndex(0.0),
+      m_dNextSampleIndex(0.0)
 {
-    m_dBaseRate = 0.0f;
-    m_dTempo = 0.0f;
-    m_fOldTempo = 1.0f;
-    m_fOldBaseRate = 1.0f;
-    m_dCurSampleIndex = 0.0f;
-    m_dNextSampleIndex = 0.0f;
-
     for (int i=0; i<2; i++)
         m_fPrevSample[i] = 0.0f;
 
@@ -41,7 +43,7 @@ EngineBufferScaleLinear::EngineBufferScaleLinear(ReadAheadManager *pReadAheadMan
     df.open(QIODevice::WriteOnly | QIODevice::Text);
     writer.setDevice(&df);
     buffer_count=0;*/
-    SampleUtil::applyGain(buffer_int, 0.0, kiLinearScaleReadAheadLength);
+    SampleUtil::clear(buffer_int, kiLinearScaleReadAheadLength);
 }
 
 EngineBufferScaleLinear::~EngineBufferScaleLinear()
@@ -50,39 +52,21 @@ EngineBufferScaleLinear::~EngineBufferScaleLinear()
     delete [] buffer_int;
 }
 
-double EngineBufferScaleLinear::setTempo(double _tempo)
-{
-//    if (m_fOldTempo != m_dTempo)
-        m_fOldTempo = m_dTempo; //Save the old tempo when the tempo changes
+void EngineBufferScaleLinear::setScaleParameters(int iSampleRate,
+                                                 double base_rate,
+                                                 double* pTempoRatio,
+                                                 double* pPitchRatio) {
+    Q_UNUSED(pPitchRatio);
+    m_iSampleRate = iSampleRate;
 
-    m_dTempo = _tempo;
-
-    if (m_dTempo > MAX_SEEK_SPEED) {
-        m_dTempo = MAX_SEEK_SPEED;
-    } else if (m_dTempo < -MAX_SEEK_SPEED) {
-        m_dTempo = -MAX_SEEK_SPEED;
-    }
+    m_dOldRate = m_dRate;
+    m_dRate = base_rate * *pTempoRatio;
 
     // Determine playback direction
-    if (m_dTempo < 0.) {
-        m_bBackwards = true;
-    } else {
-        m_bBackwards = false;
-    }
-
-    return m_dTempo;
+    m_bBackwards = m_dRate < 0.0;
 }
 
-void EngineBufferScaleLinear::setBaseRate(double dBaseRate)
-{
-//    if (m_fOldBaseRate != m_dBaseRate)
-        m_fOldBaseRate = m_dBaseRate; //Save the old baserate when it changes
-
-    m_dBaseRate = dBaseRate*m_dTempo;
-}
-
-void EngineBufferScaleLinear::clear()
-{
+void EngineBufferScaleLinear::clear() {
     m_bClear = true;
     // Clear out buffer and saved sample data
     buffer_int_size = 0;
@@ -90,7 +74,6 @@ void EngineBufferScaleLinear::clear()
     m_fPrevSample[0] = 0;
     m_fPrevSample[1] = 0;
 }
-
 
 // laurent de soras - punked from musicdsp.org (mad props)
 inline float hermite4(float frac_pos, float xm1, float x0, float x1, float x2)
@@ -105,9 +88,13 @@ inline float hermite4(float frac_pos, float xm1, float x0, float x1, float x2)
 
 /** Determine if we're changing directions (scratching) and then perform
     a stretch */
-CSAMPLE * EngineBufferScaleLinear::getScaled(unsigned long buf_size) {
-    float rate_add_new = m_dBaseRate;
-    float rate_add_old = m_fOldBaseRate; //Smoothly interpolate to new playback rate
+CSAMPLE* EngineBufferScaleLinear::getScaled(unsigned long buf_size) {
+    if (m_bClear) {
+        m_dOldRate = m_dRate;  // If cleared, don't interpolate rate.
+        m_bClear = false;
+    }
+    float rate_add_old = m_dOldRate;  //Smoothly interpolate to new playback rate
+    float rate_add_new = m_dRate;
     int samples_read = 0;
     m_samplesRead = 0;
 
@@ -121,8 +108,8 @@ CSAMPLE * EngineBufferScaleLinear::getScaled(unsigned long buf_size) {
         //the other way.
 
         //first half: rate goes from old rate to zero
-        m_fOldBaseRate = rate_add_old;
-        m_dBaseRate = 0.0;
+        m_dOldRate = rate_add_old;
+        m_dRate = 0.0;
         m_buffer = do_scale(m_buffer, buf_size/2, &samples_read);
 
         // reset prev sample so we can now read in the other direction (may not
@@ -152,8 +139,8 @@ CSAMPLE * EngineBufferScaleLinear::getScaled(unsigned long buf_size) {
         m_dNextSampleIndex = 1.0 - (m_dNextSampleIndex - floor(m_dNextSampleIndex));
 
         //second half: rate goes from zero to new rate
-        m_fOldBaseRate = 0.0;
-        m_dBaseRate = rate_add_new;
+        m_dOldRate = 0.0;
+        m_dRate = rate_add_new;
         //pass the address of the sample at the halfway point
         do_scale(&m_buffer[buf_size/2], buf_size/2, &samples_read);
 
@@ -167,16 +154,15 @@ CSAMPLE * EngineBufferScaleLinear::getScaled(unsigned long buf_size) {
 }
 
 /** Stretch a specified buffer worth of audio using linear interpolation */
-CSAMPLE * EngineBufferScaleLinear::do_scale(CSAMPLE* buf,
-        unsigned long buf_size, int* samples_read) {
-    float rate_add_new = m_dBaseRate;
-    // Smoothly interpolate to new playback rate
-    float rate_add_old = m_fOldBaseRate;
+CSAMPLE* EngineBufferScaleLinear::do_scale(CSAMPLE* buf,
+                                           unsigned long buf_size, int* samples_read) {
+    float rate_add_old = m_dOldRate;
+    float rate_add_new = m_dRate;
     float rate_add_diff = rate_add_new - rate_add_old;
 
     //Update the old base rate because we only need to
     //interpolate/ramp up the pitch changes once.
-    m_fOldBaseRate = m_dBaseRate;
+    m_dOldRate = m_dRate;
 
     // Determine position in read_buffer to start from. (This is always 0 with
     // the new EngineBuffer implementation)
@@ -244,7 +230,7 @@ CSAMPLE * EngineBufferScaleLinear::do_scale(CSAMPLE* buf,
         *samples_read += read_samples;
 
         // Zero the remaining samples if we didn't fill them.
-        SampleUtil::applyGain(write_buf, 0.0f, samples_needed);
+        SampleUtil::clear(write_buf, samples_needed);
 
         // update our class members so next time we need to scale it's ok. we do
         // blow away the fractional sample position here
@@ -278,7 +264,7 @@ CSAMPLE * EngineBufferScaleLinear::do_scale(CSAMPLE* buf,
     unscaled_samples_needed *= 2;
 
     // 0 is never the right answer
-    unscaled_samples_needed = math_max(2, unscaled_samples_needed);
+    unscaled_samples_needed = math_max<long>(2, unscaled_samples_needed);
 
     bool last_read_failed = false;
     CSAMPLE prev_sample[2];
@@ -323,14 +309,13 @@ CSAMPLE * EngineBufferScaleLinear::do_scale(CSAMPLE* buf,
         while (static_cast<int>(ceil(m_dCurSampleIndex)) * 2 + 1 >=
                buffer_int_size) {
             int old_bufsize = buffer_int_size;
-            //Q_ASSERT(unscaled_samples_needed > 0);
             if (unscaled_samples_needed == 0) {
                 unscaled_samples_needed = 2;
                 screwups++;
             }
 
-            int samples_to_read = math_min(kiLinearScaleReadAheadLength,
-                                           unscaled_samples_needed);
+            int samples_to_read = math_min<int>(kiLinearScaleReadAheadLength,
+                                                unscaled_samples_needed);
 
             buffer_int_size = m_pReadAheadManager->getNextSamples(
                 rate_add_new == 0 ? rate_add_old : rate_add_new,
@@ -344,7 +329,7 @@ CSAMPLE * EngineBufferScaleLinear::do_scale(CSAMPLE* buf,
 
             unscaled_samples_needed -= buffer_int_size;
             //shift the index by the size of the old buffer
-            m_dCurSampleIndex -= old_bufsize / 2;
+            m_dCurSampleIndex -= old_bufsize / 2.;
         }
 
         // Now that the buffer is up to date, we can get the value of the sample
@@ -386,7 +371,7 @@ CSAMPLE * EngineBufferScaleLinear::do_scale(CSAMPLE* buf,
         i +=2 ;
     }
 
-    SampleUtil::applyGain(&buf[i], 0.0f, buf_size - i);
+    SampleUtil::clear(&buf[i], buf_size - i);
 
     return buf;
 }

@@ -18,12 +18,11 @@ class CueDAO : public DAO {
   public:
     CueDAO(QSqlDatabase& database);
     virtual ~CueDAO();
-    void setDatabase(QSqlDatabase& database) { m_database = database; };
+    void setDatabase(QSqlDatabase& database) { m_database = database; }
 
     void initialize();
     int cueCount();
     int numCuesForTrack(const int trackId);
-    Cue* getCue(const int cueId);
     QList<Cue*> getCuesForTrack(const int trackId) const;
     bool deleteCuesForTrack(const int trackId);
     bool deleteCuesForTracks(const QList<int>& ids);

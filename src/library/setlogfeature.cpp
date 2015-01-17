@@ -1,8 +1,5 @@
 #include <QtDebug>
 #include <QMenu>
-#include <QInputDialog>
-#include <QFileDialog>
-#include <QDesktopServices>
 #include <QDateTime>
 
 #include "library/setlogfeature.h"
@@ -17,35 +14,20 @@
 SetlogFeature::SetlogFeature(QObject* parent,
                              ConfigObject<ConfigValue>* pConfig,
                              TrackCollection* pTrackCollection)
-        : BasePlaylistFeature(parent, pConfig, pTrackCollection, "SETLOGHOME") {
+        : BasePlaylistFeature(parent, pConfig, pTrackCollection, "SETLOGHOME"),
+          m_playlistId(-1) {
     m_pPlaylistTableModel = new PlaylistTableModel(this, pTrackCollection,
                                                    "mixxx.db.model.setlog",
-                                                   true);//show all tracks
+                                                   true); //show all tracks
     m_pJoinWithPreviousAction = new QAction(tr("Join with previous"), this);
     connect(m_pJoinWithPreviousAction, SIGNAL(triggered()),
             this, SLOT(slotJoinWithPrevious()));
 
-    //create a new playlist for today
-    QString set_log_name_format;
-    QString set_log_name;
+    m_pGetNewPlaylist = new QAction(tr("Create new history playlist"), this);
+    connect(m_pGetNewPlaylist, SIGNAL(triggered()), this, SLOT(slotGetNewPlaylist()));
 
-    set_log_name = QDate::currentDate().toString(Qt::ISODate);
-    set_log_name_format = set_log_name + " (%1)";
-    int i = 1;
-
-    // calculate name of the todays setlog
-    while (m_playlistDao.getPlaylistIdFromName(set_log_name) != -1) {
-        set_log_name = set_log_name_format.arg(++i);
-    }
-
-    qDebug() << "Creating session history playlist name:" << set_log_name;
-    m_playlistId = m_playlistDao.createPlaylist(set_log_name,
-                                                PlaylistDAO::PLHT_SET_LOG);
-
-    if (m_playlistId == -1) {
-        qDebug() << "Setlog playlist Creation Failed";
-        qDebug() << "An unknown error occurred while creating playlist: " << set_log_name;
-    }
+    // initialised in a new generic slot(get new history playlist purpose)
+    emit(slotGetNewPlaylist());
 
     //construct child model
     TreeItem *rootItem = new TreeItem();
@@ -75,7 +57,7 @@ void SetlogFeature::bindWidget(WLibrary* libraryWidget,
                                MixxxKeyboard* keyboard) {
     BasePlaylistFeature::bindWidget(libraryWidget,
                                     keyboard);
-    connect(&PlayerInfo::Instance(), SIGNAL(currentPlayingDeckChanged(int)),
+    connect(&PlayerInfo::instance(), SIGNAL(currentPlayingDeckChanged(int)),
             this, SLOT(slotPlayingDeckChanged(int)));
 }
 
@@ -100,6 +82,7 @@ void SetlogFeature::onRightClickChild(const QPoint& globalPos, QModelIndex index
     bool locked = m_playlistDao.isPlaylistLocked(playlistId);
     m_pDeletePlaylistAction->setEnabled(!locked);
     m_pRenamePlaylistAction->setEnabled(!locked);
+    m_pJoinWithPreviousAction->setEnabled(!locked);
 
     m_pLockPlaylistAction->setText(locked ? tr("Unlock") : tr("Lock"));
 
@@ -119,6 +102,10 @@ void SetlogFeature::onRightClickChild(const QPoint& globalPos, QModelIndex index
     if (index.row() > 0) {
         // The very first setlog cannot be joint
         menu.addAction(m_pJoinWithPreviousAction);
+    }
+    if (playlistId == m_playlistId && m_playlistDao.tracksInPlaylist(m_playlistId) != 0) {
+        // Todays playlists can change !
+        menu.addAction(m_pGetNewPlaylist);
     }
     menu.addSeparator();
     menu.addAction(m_pExportPlaylistAction);
@@ -161,6 +148,35 @@ void SetlogFeature::decorateChild(TreeItem* item, int playlist_id) {
     }
 }
 
+void SetlogFeature::slotGetNewPlaylist() {
+    //qDebug() << "slotGetNewPlaylist() succesfully triggered !";
+
+    // create a new playlist for today
+    QString set_log_name_format;
+    QString set_log_name;
+
+    set_log_name = QDate::currentDate().toString(Qt::ISODate);
+    set_log_name_format = set_log_name + " (%1)";
+    int i = 1;
+
+    // calculate name of the todays setlog
+    while (m_playlistDao.getPlaylistIdFromName(set_log_name) != -1) {
+        set_log_name = set_log_name_format.arg(++i);
+    }
+
+    //qDebug() << "Creating session history playlist name:" << set_log_name;
+    m_playlistId = m_playlistDao.createPlaylist(set_log_name,
+                                                PlaylistDAO::PLHT_SET_LOG);
+
+    if (m_playlistId == -1) {
+        qDebug() << "Setlog playlist Creation Failed";
+        qDebug() << "An unknown error occurred while creating playlist: " << set_log_name;
+    }
+
+    slotPlaylistTableChanged(m_playlistId); // For moving selection
+    emit(showTrackModel(m_pPlaylistTableModel));
+}
+
 void SetlogFeature::slotJoinWithPrevious() {
     //qDebug() << "slotJoinWithPrevious() row:" << m_lastRightClickedIndex.data();
 
@@ -188,7 +204,7 @@ void SetlogFeature::slotJoinWithPrevious() {
 
                     m_pPlaylistTableModel->select();
                     int rows = m_pPlaylistTableModel->rowCount();
-                    for(int i = 0; i < rows; ++i){
+                    for (int i = 0; i < rows; ++i) {
                         QModelIndex index = m_pPlaylistTableModel->index(i,0);
                         if (index.isValid()) {
                             TrackPointer track = m_pPlaylistTableModel->getTrack(index);
@@ -216,7 +232,7 @@ void SetlogFeature::slotPlayingDeckChanged(int deck) {
     if (deck > -1) {
         QString chan = PlayerManager::groupForDeck(deck);
         TrackPointer currentPlayingTrack =
-                PlayerInfo::Instance().getTrackInfo(chan);
+                PlayerInfo::instance().getTrackInfo(chan);
         if (!currentPlayingTrack) {
             return;
         }
@@ -274,13 +290,6 @@ void SetlogFeature::slotPlaylistTableChanged(int playlistId) {
         type == PlaylistDAO::PLHT_UNKNOWN) { // In case of a deleted Playlist
         clearChildModel();
         m_lastRightClickedIndex = constructChildModel(playlistId);
-
-        if (type != PlaylistDAO::PLHT_UNKNOWN) {
-            // Switch the view to the playlist.
-            m_pPlaylistTableModel->setTableModel(playlistId);
-            // Update selection
-            emit(featureSelect(this, m_lastRightClickedIndex));
-        }
     }
 }
 

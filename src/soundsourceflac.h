@@ -23,19 +23,21 @@
 
 #include <FLAC/stream_decoder.h>
 
-#include "defs.h"
+#include "util/defs.h"
+#include "util/types.h"
 #include "soundsource.h"
 
 class SoundSourceFLAC : public Mixxx::SoundSource {
 public:
-    SoundSourceFLAC(QString filename);
     ~SoundSourceFLAC();
-    int open();
+    Result open();
     long seek(long filepos);
     unsigned read(unsigned long size, const SAMPLE *buffer);
     inline long unsigned length();
-    int parseHeader();
+    Result parseHeader();
+    QImage parseCoverArt();
     static QList<QString> supportedFileExtensions();
+    explicit SoundSourceFLAC(QString filename);
     // callback methods
     FLAC__StreamDecoderReadStatus flacRead(FLAC__byte buffer[], size_t *bytes);
     FLAC__StreamDecoderSeekStatus flacSeek(FLAC__uint64 offset);
@@ -52,7 +54,6 @@ private:
     inline FLAC__int16 shift(const FLAC__int32 sample) const;
     QFile m_file;
     FLAC__StreamDecoder *m_decoder;
-    FLAC__StreamMetadata_StreamInfo *m_streamInfo;
     unsigned int m_samples; // total number of samples
     unsigned int m_bps; // bits per sample
     // misc bits about the flac format:

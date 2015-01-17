@@ -9,7 +9,8 @@
 
 class GLSLWaveformRendererSignal : public WaveformRendererSignalBase {
   public:
-    explicit GLSLWaveformRendererSignal(WaveformWidgetRenderer* waveformWidgetRenderer);
+    explicit GLSLWaveformRendererSignal(
+            WaveformWidgetRenderer* waveformWidgetRenderer, bool rgbShader);
     virtual ~GLSLWaveformRendererSignal();
 
     virtual bool onInit();
@@ -19,6 +20,7 @@ class GLSLWaveformRendererSignal : public WaveformRendererSignalBase {
     virtual void onSetTrack();
     virtual void onResize();
 
+    void debugClick();
     bool loadShaders();
     bool loadTexture();
 
@@ -33,15 +35,30 @@ class GLSLWaveformRendererSignal : public WaveformRendererSignalBase {
 
     //Frame buffer for two pass rendering
     bool m_frameBuffersValid;
-    QGLFramebufferObject* m_signalMaxbuffer;
     QGLFramebufferObject* m_framebuffer;
 
-    int m_signalFrameBufferRatio;
+    bool m_bDumpPng;
 
-    //shaders
+    // shaders
     bool m_shadersValid;
-    QGLShaderProgram* m_signalMaxShaderProgram;
+    bool m_rgbShader;
     QGLShaderProgram* m_frameShaderProgram;
+};
+
+class GLSLWaveformRendererFilteredSignal : public GLSLWaveformRendererSignal {
+  public:
+    GLSLWaveformRendererFilteredSignal(
+        WaveformWidgetRenderer* waveformWidgetRenderer)
+        : GLSLWaveformRendererSignal(waveformWidgetRenderer, false) {}
+    virtual ~GLSLWaveformRendererFilteredSignal() {}
+};
+
+class GLSLWaveformRendererRGBSignal : public GLSLWaveformRendererSignal {
+  public:
+    GLSLWaveformRendererRGBSignal(
+        WaveformWidgetRenderer* waveformWidgetRenderer)
+        : GLSLWaveformRendererSignal(waveformWidgetRenderer, true) {}
+    virtual ~GLSLWaveformRendererRGBSignal() {}
 };
 
 #endif // GLWAVEFORMRENDERERSIGNALSHADER_H

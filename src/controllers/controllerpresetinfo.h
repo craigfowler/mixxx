@@ -12,11 +12,15 @@
 #ifndef CONTROLLERPRESETINFO_H
 #define CONTROLLERPRESETINFO_H
 
-#include <QtGui>
+#include <QString>
 #include <QMap>
+#include <QList>
 #include <QHash>
+#include <QDomElement>
 
 #include "configobject.h"
+#include "controllers/controllerpreset.h"
+#include "controllers/controllerpresetfilehandler.h"
 
 class PresetInfo {
   public:
@@ -36,7 +40,7 @@ class PresetInfo {
     inline const QString getWikiLink() const { return wikilink; };
     inline const QString getAuthor() const { return author; };
 
-    inline const QList< QHash<QString,QString> > getProducts() const { return products; };
+    inline const QList<QHash<QString,QString> > getProducts() const { return products; };
 
   private:
     QHash<QString,QString> parseBulkProduct(const QDomElement& element) const;
@@ -52,13 +56,13 @@ class PresetInfo {
     QString description;
     QString forumlink;
     QString wikilink;
-    QList< QHash<QString,QString> > products;
+    QList<QHash<QString,QString> > products;
 };
 
 class PresetInfoEnumerator {
   public:
     PresetInfoEnumerator(ConfigObject<ConfigValue> *pConfig);
-    virtual ~PresetInfoEnumerator() {};
+    virtual ~PresetInfoEnumerator();
 
     bool isValidExtension(const QString extension);
 
@@ -68,7 +72,7 @@ class PresetInfoEnumerator {
     PresetInfo getPresetInfo(const QString path);
 
     // Return cached list of presets for this extension
-    QList <PresetInfo> getPresets(const QString extension);
+    QList<PresetInfo> getPresets(const QString extension);
 
     // Updates presets matching given extension
     void updatePresets(const QString extension);
@@ -78,16 +82,15 @@ class PresetInfoEnumerator {
     void loadSupportedPresets();
 
   private:
-    QList <QString> fileExtensions;
-    ConfigObject<ConfigValue>* m_pConfig;
+    QList<QString> fileExtensions;
 
     // List of paths for controller presets
-    QList <QString> controllerDirPaths;
+    QList<QString> controllerDirPaths;
 
     // Cached presets by extension. Map format is:
     // [extension,[preset_path,preset]]
-    QMap <QString, QMap<QString, PresetInfo> > presetsByExtension;
-
+    QMap<QString, QMap<QString, PresetInfo> > presetsByExtension;
+    QMap<QString, ControllerPresetFileHandler*> m_presetFileHandlersByExtension;
 };
 
 #endif

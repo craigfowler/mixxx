@@ -6,12 +6,13 @@
  *  as published by Sam Hocevar.                                             *
  *  See http://www.wtfpl.net/ for more details.                              *
  *****************************************************************************/
-    
+
 #include <QCoreApplication>
 #include <QNetworkReply>
 #include <QtNetwork>
 #include <QSet>
 #include <QXmlStreamReader>
+#include <QUrl>
 
 #include "musicbrainzclient.h"
 
@@ -22,7 +23,7 @@ const int MusicBrainzClient::m_DefaultTimeout = 5000; // msec
 MusicBrainzClient::MusicBrainzClient(QObject* parent)
                  : QObject(parent),
                    m_network(this),
-                   m_timeouts(m_DefaultTimeout, this){
+                   m_timeouts(m_DefaultTimeout, this) {
 }
 
 void MusicBrainzClient::start(int id, const QString& mbid) {
@@ -74,7 +75,7 @@ void MusicBrainzClient::requestFinished() {
 
     QXmlStreamReader reader(reply);
     while (!reader.atEnd()) {
-        if (reader.readNext() == QXmlStreamReader::StartElement 
+        if (reader.readNext() == QXmlStreamReader::StartElement
             && reader.name() == "recording") {
 
             ResultList tracks = parseTrack(reader);

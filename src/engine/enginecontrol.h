@@ -11,10 +11,11 @@
 #include "controlobjectthread.h"
 #include "trackinfoobject.h"
 #include "control/controlvalue.h"
+#include "engine/effects/groupfeaturestate.h"
+#include "cachingreader.h"
 
 class EngineMaster;
 class EngineBuffer;
-struct Hint;
 
 const double kNoTrigger = -1;
 
@@ -34,8 +35,8 @@ const double kNoTrigger = -1;
 class EngineControl : public QObject {
     Q_OBJECT
   public:
-    EngineControl(const char * _group,
-                  ConfigObject<ConfigValue> * _config);
+    EngineControl(QString group,
+                  ConfigObject<ConfigValue>* _config);
     virtual ~EngineControl();
 
     // Called by EngineBuffer::process every latency period. See the above
@@ -62,13 +63,19 @@ class EngineControl : public QObject {
     // hintReader allows the EngineControl to provide hints to the reader to
     // indicate that the given portion of a song is a potential imminent seek
     // target.
-    virtual void hintReader(QVector<Hint>* pHintList);
+    virtual void hintReader(HintVector* pHintList);
 
-    void setEngineMaster(EngineMaster* pEngineMaster);
+    virtual void setEngineMaster(EngineMaster* pEngineMaster);
     void setEngineBuffer(EngineBuffer* pEngineBuffer);
-    void setCurrentSample(const double dCurrentSample, const double dTotalSamples);
+    virtual void setCurrentSample(const double dCurrentSample, const double dTotalSamples);
     double getCurrentSample() const;
     double getTotalSamples() const;
+    QString getGroup() const;
+
+    // Called to collect player features for effects processing.
+    virtual void collectFeatureState(GroupFeatureState* pGroupFeatures) const {
+        Q_UNUSED(pGroupFeatures);
+    }
 
     // Called whenever a seek occurs to allow the EngineControl to respond.
     virtual void notifySeek(double dNewPlaypo);
@@ -80,16 +87,18 @@ class EngineControl : public QObject {
   protected:
     void seek(double fractionalPosition);
     void seekAbs(double sample);
+    // Seek to an exact sample and don't allow quantizing adjustment.
+    void seekExact(double sample);
     EngineBuffer* pickSyncTarget();
 
-    const char* getGroup();
     ConfigObject<ConfigValue>* getConfig();
     EngineMaster* getEngineMaster();
     EngineBuffer* getEngineBuffer();
 
-  private:
-    const char* m_pGroup;
+    QString m_group;
     ConfigObject<ConfigValue>* m_pConfig;
+
+  private:
     ControlValueAtomic<double> m_dCurrentSample;
     double m_dTotalSamples;
     EngineMaster* m_pEngineMaster;
