@@ -157,20 +157,20 @@
      <status>0x90</status>
      <midino>0x22</midino>
      <group>[Channel1]</group>
-     <key>cue_default</key>
+     <key>DJCRMX2.cue_default_left</key>
      <description></description>
      <options>
-      <normal/>
+      <script-binding/>
      </options>
     </control>
     <control><!-- R Cue -->
      <status>0x90</status>
      <midino>0x33</midino>
      <group>[Channel2]</group>
-     <key>cue_default</key>
+     <key>DJCRMX2.cue_default_right</key>
      <description></description>
      <options>
-      <normal/>
+      <script-binding/>
      </options>
     </control>
     <control><!-- L Sync -->
@@ -976,6 +976,31 @@
      </options>
     </control>
     <!-- Looping Controls [Loop Mode] -->
+
+    <!-- Custom controls added by Craig Fowler -->
+    
+    <control><!-- Left shift -->
+      <status>0x90</status>
+      <midino>0x30</midino>
+      <group>[Channel1]</group>
+      <key>DJCRMX2.left_shift</key>
+      <description>Left hand shift key</description>
+      <options>
+	<script-binding/>
+      </options>
+    </control>
+    
+    <control><!-- Right shift -->
+      <status>0x90</status>
+      <midino>0x41</midino>
+      <group>[Channel2]</group>
+      <key>DJCRMX2.right_shift</key>
+      <description>Right hand shift key</description>
+      <options>
+	<script-binding/>
+      </options>
+    </control>
+    
     <!-- End of Controls -->
    </controls>
   <outputs>
@@ -1157,7 +1182,7 @@
             </output>
             <output>
                 <group>[Channel1]</group>
-                <key>play_indicator</key>
+                <key>play</key>
                 <description></description>
                 <minimum>0.5</minimum>
                 <maximum>1</maximum>
@@ -1168,7 +1193,7 @@
             </output>
             <output>
                 <group>[Channel1]</group>
-                <key>cue_indicator</key>
+                <key>cue_default</key>
                 <description></description>
                 <minimum>0.5</minimum>
                 <maximum>1</maximum>
@@ -1234,7 +1259,7 @@
             </output>
 	        <output>
                 <group>[Channel2]</group>
-                <key>play_indicator</key>
+                <key>play</key>
                 <description></description>
                 <minimum>0.5</minimum>
                 <maximum>1</maximum>
@@ -1245,7 +1270,7 @@
             </output>
             <output>
                 <group>[Channel2]</group>
-                <key>cue_indicator</key>
+                <key>cue_default</key>
                 <description></description>
                 <minimum>0.5</minimum>
                 <maximum>1</maximum>
