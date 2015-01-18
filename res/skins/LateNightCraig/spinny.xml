@@ -1,0 +1,61 @@
+<Template>
+  <WidgetGroup>
+    <Layout>horizontal</Layout>
+    <Children>
+      <WidgetStack currentpage="[Master],spinny_size" persist="true">
+        <SizePolicy>max,min</SizePolicy>
+        <Children>
+          <WidgetGroup>
+            <ObjectName>SpinnyContainer</ObjectName>
+            <Layout>horizontal</Layout>
+            <SizePolicy>min,min</SizePolicy>
+            <Children>
+              <Spinny>
+                <Group>[Channel<Variable name="channum"/>]</Group>
+                <PathBackground>spinny_bg.svg</PathBackground>
+                <PathMask>spinny<Variable name="color"/>_mask.svg</PathMask>
+                <PathForeground>spinny_indicator.svg</PathForeground>
+                <PathGhost>spinny_indicator_ghost.svg</PathGhost>
+                <ShowCover>true</ShowCover>
+              </Spinny>
+            </Children>
+          </WidgetGroup>
+          <WidgetGroup trigger="[Master],show_mixer">
+            <ObjectName>SpinnyContainer</ObjectName>
+            <Layout>horizontal</Layout>
+            <SizePolicy>min,min</SizePolicy>
+            <Children>
+              <Spinny>
+                <Size>50f,50f</Size>
+                <Group>[Channel<Variable name="channum"/>]</Group>
+                <PathBackground scalemode="STRETCH">spinny_bg.svg</PathBackground>
+                <PathMask>spinny<Variable name="color"/>_mask.svg</PathMask>
+                <PathForeground>spinny_indicator.svg</PathForeground>
+                <PathGhost>spinny_indicator_ghost.svg</PathGhost>
+                <ShowCover>true</ShowCover>
+              </Spinny>
+            </Children>
+          </WidgetGroup>
+        </Children>
+        <Connection>
+            <ConfigKey persist="true">[Spinny],show_spinnies</ConfigKey>
+            <BindProperty>visible</BindProperty>
+        </Connection>
+      </WidgetStack>
+      <!-- If the spinnies are hidden, create an invisible margin of the correct
+      height because the waveforms follow that height.  -->
+      <WidgetGroup>
+        <Layout>horizontal</Layout>
+        <Size>0f,96f</Size>
+        <Children/>
+        <Connection>
+            <ConfigKey>[Master],show_mixer</ConfigKey>
+            <BindProperty>visible</BindProperty>
+            <Transform>
+              <Not/>
+            </Transform>
+        </Connection>    
+      </WidgetGroup>
+    </Children>
+  </WidgetGroup>
+</Template>
