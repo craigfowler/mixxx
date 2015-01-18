@@ -4257,7 +4257,7 @@
 			Text- BPM number display
 			**********************************************
 			-->
-			<NumberBpm>
+			<TrackProperty>
 				<TooltipId>visual_bpm</TooltipId>
 				<Style>QLabel { font: bold 18px/20px Lucida Grande, Lucida Sans Unicode, Arial, Verdana, sans-serif;
 				background-color: transparent; color: #FBC400; text-align: left;padding-left: 1px; }
@@ -4267,10 +4267,28 @@
 				<Size>100,23</Size>
 				<!--CSS alignments not respected see bug lp:605530 , lets call <Alignment>-->
 				<Alignment>right</Alignment>
+				<Property>bpmFormatted</Property>
+			</TrackProperty>
+			
+			<!--
+			
+			Commented out by Craig Fowler - 2014-10-05 in order to replace the effective BPM readout with only the track's original BPM.
+
+			<NumberBpm>
+				<TooltipId>visual_bpm</TooltipId>
+				<Style>QLabel { font: bold 18px/20px Lucida Grande, Lucida Sans Unicode, Arial, Verdana, sans-serif;
+				background-color: transparent; color: #FBC400; text-align: left;padding-left: 1px; }
+				</Style>
+				<Channel>1</Channel>
+				<Pos>378,1</Pos>
+				<Size>100,23</Size>
+				<Alignment>right</Alignment>
 				<Connection>
 					<ConfigKey>[Channel1],visual_bpm</ConfigKey>
 				</Connection>
 			</NumberBpm>
+			
+			-->
 
 			<!--
 			**********************************************
@@ -4318,11 +4336,13 @@
 			<!-- Little trickery here:
 				 BPM tap is transparent png directly over BPM display, so it became BPM and TAP at once,
 				 changed tooltip accordingly
-			-->
+				 
+			Commented out by Craig Fowler - 2014-10-05 in order to replace the effective BPM readout with only the track's original BPM.
+			
 			<PushButton>
-			<!-- Original:
+			 Original:
 				<TooltipId>bpm_tap</TooltipId>
-			-->
+			
 				<TooltipId>bpm_tap_visual_bpm</TooltipId>
 				<Style></Style>
 				<NumberStates>1</NumberStates>
@@ -4337,6 +4357,8 @@
 					<EmitOnPressAndRelease>true</EmitOnPressAndRelease>
 				</Connection>
 			</PushButton>
+			
+			-->
 
 			<!--
 			**********************************************
@@ -5239,6 +5261,23 @@
 			Text- BPM number display
 			**********************************************
 			-->
+			<TrackProperty>
+				<TooltipId>visual_bpm</TooltipId>
+				<Style>QLabel { font: bold 18px/20px Lucida Grande, Lucida Sans Unicode, Arial, Verdana, sans-serif;
+				background-color: transparent; color: #FBC400; text-align: left;padding-left: 1px; }
+				</Style>
+				<Channel>2</Channel>
+				<Pos>378,1</Pos>
+				<Size>100,23</Size>
+				<!--CSS alignments not respected see bug lp:605530 , lets call <Alignment>-->
+				<Alignment>right</Alignment>
+				<Property>bpmFormatted</Property>
+			</TrackProperty>
+			
+			<!--
+			
+			Commented out by Craig Fowler - 2014-10-05 in order to replace the effective BPM readout with only the track's original BPM.
+			
 			<NumberBpm>
 				<TooltipId>visual_bpm</TooltipId>
 				<Style>QLabel { font: bold 18px/20px Lucida Grande, Lucida Sans Unicode, Arial, Verdana, sans-serif;
@@ -5247,12 +5286,13 @@
 				<Channel>2</Channel>
 				<Pos>378,1</Pos>
 				<Size>100,23</Size>
-				<!--CSS alignments not respected see bug lp:605530 , lets call <Alignment>-->
 				<Alignment>right</Alignment>
 				<Connection>
 					<ConfigKey>[Channel2],visual_bpm</ConfigKey>
 				</Connection>
 			</NumberBpm>
+			
+			-->
 
 			<!--
 			**********************************************
@@ -5300,11 +5340,13 @@
 			<!-- Little trickery here:
 				 BPM tap is transparent png directly over BPM display, so it became BPM and TAP at once,
 				 changed tooltip accordingly
-			-->
+				 
+			Commented out by Craig Fowler - 2014-10-05 in order to replace the effective BPM readout with only the track's original BPM.
+			
 			<PushButton>
-			<!-- Original:
+			 Original:
 				<TooltipId>bpm_tap</TooltipId>
-			-->
+			
 				<TooltipId>bpm_tap_visual_bpm</TooltipId>
 				<Style></Style>
 				<NumberStates>1</NumberStates>
@@ -5319,6 +5361,8 @@
 					<EmitOnPressAndRelease>true</EmitOnPressAndRelease>
 				</Connection>
 			</PushButton>
+			
+			-->
 
 			<!--
 			**********************************************
