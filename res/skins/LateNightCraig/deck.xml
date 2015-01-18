@@ -105,7 +105,7 @@
                                <ObjectName>BpmContainer</ObjectName>
                                <Size>60,16</Size>
                                <Children>
-                                   <NumberBpm>
+                                   <TrackProperty>
                                       <ObjectName>BpmTextColor<Variable name="channum" /></ObjectName>
                                       <TooltipId>visual_bpm</TooltipId>
                                       <Pos>0,0</Pos>
@@ -114,10 +114,8 @@
                                           <Variable name="channum" />
                                       </Channel>
                                       <NumberOfDigits>2</NumberOfDigits>
-                                      <Connection>
-                                          <ConfigKey>[Channel<Variable name="channum" />],visual_bpm</ConfigKey>
-                                      </Connection>
-                                  </NumberBpm>
+                                      <Property>bpmFormatted</Property>
+                                  </TrackProperty>
                                   <PushButton>
                                       <TooltipId>bpm_tap_visual_bpm</TooltipId>
                                       <NumberStates>1</NumberStates>
