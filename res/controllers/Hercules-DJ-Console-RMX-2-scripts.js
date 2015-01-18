@@ -24,6 +24,9 @@ DJCRMX2.init = function(id){
  DJCRMX2.scratching[2]=false;
  engine.setValue("[Microphone]","enabled",0);
  engine.setValue("[Microphone]","talkover",0);
+ 
+ DJCRMX2.leftShiftState = false;
+ DJCRMX2.rightShiftState = false;
 }
 
 /*  [ Function wheelPress ] - Version 0.1.2
@@ -115,6 +118,29 @@ DJCRMX2.micSwitch = function (channel, control, value, status) //???
   engine.setValue("[Microphone]","enabled",0);
   engine.setValue("[Microphone]","talkover",0);
  }
+}
+
+/* Scripts added by Craig Fowler
+ */
+
+DJCRMX2.left_shift = function (channel, control, value, status, group) {
+  DJCRMX2.leftShiftState = (value == 0x7F);
+}
+
+DJCRMX2.right_shift = function (channel, control, value, status, group) {
+  DJCRMX2.rightShiftState = (value == 0x7F);
+}
+
+DJCRMX2.cue_default_left = function (channel, control, value, status, group) {
+  var command = DJCRMX2.leftShiftState? "cue_gotoandstop" : "cue_default";
+  var action = (value == 0x7F)? 1 : 0;
+  engine.setValue("[Channel1]", command, action);
+}
+
+DJCRMX2.cue_default_right = function (channel, control, value, status, group) {
+  var command = DJCRMX2.rightShiftState? "cue_gotoandstop" : "cue_default";
+  var action = (value == 0x7F)? 1 : 0;
+  engine.setValue("[Channel2]", command, action);
 }
 
 /*  [ Function shutdown ] - Version 0.1.3
