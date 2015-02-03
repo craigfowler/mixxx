@@ -93,6 +93,9 @@ DJCRMX2.wheelTurn = function (channel, control, value, status, group){
  // Spinning forwards  = 1 or more (more meaning faster)
  if (value-64 > 0) newValue = (value-128);
  else newValue=value;
+ 
+ newValue = Math.round(newValue / 3);
+ 
  //if (!engine.isScratching(DJCRMX2.currentDeck)) // [FUT]
  if(group=="[Channel1]")
  {
